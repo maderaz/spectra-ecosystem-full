@@ -278,7 +278,8 @@
           <option value="60">60 days</option>
           <option value="90">90 days</option>
         </select>
-        <button class="refresh-btn" id="refresh">Refresh</button>
+        <button class="refresh-btn" id="refresh" title="Incrementally fetch new transactions">Refresh</button>
+        <button class="refresh-btn" id="clear-cache" title="Drop cached data and re-fetch from scratch">Clear cache</button>
       </div>
     </div>
     <div class="stats" id="stats">
@@ -320,6 +321,10 @@
 const API_URL = 'https://api.goldsky.com/api/public/project_cm55feuq3euos01xjb3w504ls/subgraphs/spectra-flare/prod/gn';
 const PAGE_SIZE = 1000;
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const CACHE_KEY = 'spectra:yt:cache:v1';
+const CACHE_WINDOW_DAYS = 90;
+
+let cache = { txs: [], fetchedAt: 0, windowStartTs: 0, schema: null };
 
 const QUERY = `
   query AllTx($since: BigInt!, $cursor: BigInt!, $first: Int!) {
@@ -403,6 +408,112 @@ async function fetchAllTransactions(sinceTs) {
     cursor = batch[batch.length - 1].createdAtTimestamp;
   }
   return all;
+}
+
+function compressTx(tx) {
+  const ca = (a) => [a.amount, a.asset?.type || '', a.asset?.decimals ?? 18, a.asset?.price?.value || null, a.asset?.symbol || ''];
+  return {
+    i: tx.id,
+    ts: Number(tx.createdAtTimestamp),
+    ty: tx.type || '',
+    vu: tx.valueUnderlying || '0',
+    in: (tx.amountsIn || []).map(ca),
+    out: (tx.amountsOut || []).map(ca),
+  };
+}
+
+function decompressTx(c) {
+  const xa = ([amount, type, decimals, priceValue, symbol]) => ({
+    amount,
+    asset: { type, decimals, symbol, price: priceValue ? { value: priceValue } : null },
+  });
+  return {
+    id: c.i,
+    createdAtTimestamp: String(c.ts),
+    type: c.ty,
+    valueUnderlying: c.vu,
+    amountsIn: (c.in || []).map(xa),
+    amountsOut: (c.out || []).map(xa),
+  };
+}
+
+function loadCacheFromStorage() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.t)) return false;
+    cache.txs = parsed.t.map(decompressTx);
+    cache.fetchedAt = parsed.f || 0;
+    cache.windowStartTs = parsed.s || 0;
+    cache.schema = parsed.sc || null;
+    return true;
+  } catch (e) {
+    console.warn('Cache load failed:', e);
+    return false;
+  }
+}
+
+function saveCacheToStorage() {
+  try {
+    const payload = {
+      v: 1,
+      f: cache.fetchedAt,
+      s: cache.windowStartTs,
+      sc: cache.schema,
+      t: cache.txs.map(compressTx),
+    };
+    localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
+  } catch (e) {
+    console.warn('Cache save failed (likely quota):', e);
+  }
+}
+
+function mergeTxs(existing, incoming, dropBefore) {
+  const map = new Map(existing.map(t => [t.id, t]));
+  for (const t of incoming) map.set(t.id, t);
+  return Array.from(map.values())
+    .filter(t => Number(t.createdAtTimestamp) >= dropBefore)
+    .sort((a, b) => Number(a.createdAtTimestamp) - Number(b.createdAtTimestamp));
+}
+
+async function ensureCache(mode) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const targetWindowStart = nowSec - CACHE_WINDOW_DAYS * 86400;
+
+  if (cache.txs.length === 0 && cache.fetchedAt === 0) {
+    loadCacheFromStorage();
+  }
+
+  const cacheCoversWindow = cache.windowStartTs > 0 && cache.windowStartTs <= targetWindowStart + 86400;
+  const cacheAgeMs = cache.fetchedAt ? Date.now() - cache.fetchedAt * 1000 : Infinity;
+
+  if (mode !== 'force' && cache.txs.length > 0 && cacheCoversWindow) {
+    return { source: 'memory', fetched: 0, cacheAgeMs };
+  }
+
+  let fetchSince;
+  let isFullRefetch;
+  if (cache.txs.length === 0 || !cacheCoversWindow) {
+    fetchSince = targetWindowStart;
+    isFullRefetch = true;
+  } else {
+    const latestTs = cache.txs.reduce((m, t) => Math.max(m, Number(t.createdAtTimestamp)), 0);
+    fetchSince = Math.max(latestTs, targetWindowStart);
+    isFullRefetch = false;
+  }
+
+  if (!cache.schema) {
+    cache.schema = await introspect();
+  }
+
+  const newTxs = await fetchAllTransactions(fetchSince);
+  cache.txs = mergeTxs(cache.txs, newTxs, targetWindowStart);
+  cache.windowStartTs = targetWindowStart;
+  cache.fetchedAt = nowSec;
+  saveCacheToStorage();
+
+  return { source: isFullRefetch ? 'full-fetch' : 'incremental', fetched: newTxs.length, cacheAgeMs: 0 };
 }
 
 function isYtType(t) {
@@ -597,17 +708,24 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-async function load() {
+async function load(refreshMode) {
   const days = parseInt(document.getElementById('days-select').value, 10);
   document.getElementById('window-days').textContent = days;
   document.getElementById('refresh').disabled = true;
-  document.getElementById('content').classList.add('hidden');
-  setDiag(null);
-  setStatus('loading', 'Fetching transactions from Spectra subgraph…');
+
+  const hasCache = cache.txs.length > 0 || loadCacheFromStorage();
+  const willHitNetwork = refreshMode === 'force' || !hasCache;
+  if (willHitNetwork) {
+    document.getElementById('content').classList.add('hidden');
+    setDiag(null);
+    setStatus('loading', refreshMode === 'force' ? 'Refreshing from Spectra subgraph…' : 'Fetching transactions from Spectra subgraph…');
+  }
+
   try {
-    const schema = await introspect();
+    const cacheInfo = await ensureCache(refreshMode || 'use-cache');
+    const schema = cache.schema || { assetTypes: [], txTypes: [], queryFields: [] };
     const sinceTs = Math.floor(Date.now() / 1000) - days * 86400;
-    const all = await fetchAllTransactions(sinceTs);
+    const all = cache.txs.filter(t => Number(t.createdAtTimestamp) >= sinceTs);
 
     const txByType = new Map();
     const ytInByTxType = new Map();
@@ -641,15 +759,21 @@ async function load() {
     render(daily, weekly, mode);
 
     const fmtMap = (m) => Array.from(m.entries()).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `${escapeHtml(k)}×${v}`).join(' · ') || '(none)';
-    const ytRelated = schema.queryFields.filter(f => /yt|yield|purchas/i.test(f));
+    const ytRelated = (schema.queryFields || []).filter(f => /yt|yield|purchas/i.test(f));
+    const ageText = cacheInfo.cacheAgeMs === 0
+      ? 'just now'
+      : (cacheInfo.cacheAgeMs < 60000 ? Math.round(cacheInfo.cacheAgeMs/1000) + 's ago' : Math.round(cacheInfo.cacheAgeMs/60000) + 'm ago');
+    const cacheLine = cacheInfo.source === 'memory'
+      ? `<b>Cache hit:</b> ${cache.txs.length} tx in memory · last fetched ${ageText} · no API call`
+      : `<b>Cache ${cacheInfo.source}:</b> +${cacheInfo.fetched} new tx · ${cache.txs.length} total cached (last ${CACHE_WINDOW_DAYS}d)`;
     const parts = [];
-    parts.push(`<b>Fetched:</b> ${all.length} tx in last ${days}d · <b>Matched as Buy YT:</b> ${buys.length} · <b>Priced:</b> ${buysWithUsd.length}`);
-    parts.push(`<b>By TransactionType:</b> ${fmtMap(txByType)}`);
+    parts.push(cacheLine);
+    parts.push(`<b>Window:</b> last ${days}d → ${all.length} tx · <b>Matched as Buy YT:</b> ${buys.length} · <b>Priced:</b> ${buysWithUsd.length}`);
+    parts.push(`<b>By TransactionType (window):</b> ${fmtMap(txByType)}`);
     parts.push(`<b>Tx with YT in amountsOut:</b> ${fmtMap(ytOutByTxType)}`);
     parts.push(`<b>Tx with YT in amountsIn:</b> ${fmtMap(ytInByTxType)}`);
-    if (schema.txTypes.length) parts.push(`<b>Schema TransactionType enum:</b> ${schema.txTypes.map(escapeHtml).join(', ')}`);
+    if (schema.txTypes && schema.txTypes.length) parts.push(`<b>Schema TransactionType enum:</b> ${schema.txTypes.map(escapeHtml).join(', ')}`);
     if (ytRelated.length) parts.push(`<b>YT-related root query fields:</b> ${ytRelated.map(escapeHtml).join(', ')}`);
-    if (schema.queryFields.length) parts.push(`<b>All root query fields:</b> ${schema.queryFields.map(escapeHtml).join(', ')}`);
     if (mode === 'count') parts.push(`<b>⚠ No USD prices on matched txs — bars show transaction count per day.</b>`);
     if (all.length === 0) parts.push(`<b>⚠ No transactions in window. Try a wider time range.</b>`);
     setDiag(parts.join('<br>'));
@@ -683,9 +807,14 @@ function aggregateDailyByCount(txs, days) {
   return Array.from(buckets.values());
 }
 
-document.getElementById('refresh').addEventListener('click', load);
-document.getElementById('days-select').addEventListener('change', load);
-load();
+document.getElementById('refresh').addEventListener('click', () => load('force'));
+document.getElementById('clear-cache').addEventListener('click', () => {
+  try { localStorage.removeItem(CACHE_KEY); } catch (e) {}
+  cache = { txs: [], fetchedAt: 0, windowStartTs: 0, schema: null };
+  load('force');
+});
+document.getElementById('days-select').addEventListener('change', () => load('use-cache'));
+load('use-cache');
 </script>
 </body>
 </html>
