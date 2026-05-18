@@ -6,6 +6,7 @@
 <title>Spectra Token Activity — Daily Volumes</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root { --bar-color: #01f799; }
   body {
     background: #000;
     color: #fff;
@@ -159,6 +160,37 @@
   }
   .hide-toggle input { accent-color: #01f799; cursor: pointer; }
   .hide-toggle:hover { color: #fff; }
+  .color-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.7);
+    user-select: none;
+  }
+  .color-input {
+    width: 32px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+  }
+  .color-input::-webkit-color-swatch-wrapper { padding: 2px; }
+  .color-input::-webkit-color-swatch { border: none; border-radius: 3px; }
+  .color-input::-moz-color-swatch { border: none; border-radius: 3px; }
+  .color-reset {
+    background: transparent;
+    color: rgba(255,255,255,0.5);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .color-reset:hover { color: #fff; border-color: rgba(255,255,255,0.3); }
 
   .stats {
     display: flex;
@@ -233,9 +265,9 @@
     min-width: 0;
   }
   .bar {
-    background: #01f799;
+    background: var(--bar-color, #01f799);
     border-radius: 2px 2px 0 0;
-    transition: opacity 0.15s, filter 0.15s;
+    transition: opacity 0.15s, filter 0.15s, background 0.1s;
     min-height: 1px;
     position: relative;
   }
@@ -387,6 +419,11 @@
         <button class="refresh-btn" id="clear-cache" title="Drop cached data and re-fetch from scratch">Clear cache</button>
         <label class="hide-toggle" title="Drop the current (still-running) day so partial data doesn't skew the view">
           <input type="checkbox" id="hide-current"> Hide in-progress
+        </label>
+        <label class="color-wrap" title="Bar color for all charts (applies to PNG export too)">
+          Color
+          <input type="color" class="color-input" id="bar-color" value="#01f799">
+          <button class="color-reset" id="color-reset" title="Reset to default green">Reset</button>
         </label>
       </div>
     </div>
@@ -982,7 +1019,8 @@ function drawBarChartToCanvas(ctx, W, H, data, opts) {
   // Bars first so the axis lines render on top.
   const gap = opts.gap != null ? opts.gap : 3;
   const barW = Math.max(1, (plotW - gap * (data.length - 1)) / data.length);
-  ctx.fillStyle = '#01f799';
+  const barColor = (getComputedStyle(document.documentElement).getPropertyValue('--bar-color') || '#01f799').trim();
+  ctx.fillStyle = barColor || '#01f799';
   data.forEach((d, i) => {
     if (!(d.amount > 0)) return;
     const x = LEFT + i * (barW + gap);
@@ -1235,12 +1273,27 @@ async function load(refreshMode) {
 }
 
 const HIDE_PREF_KEY = 'spectra:yt:hide-current';
+const COLOR_PREF_KEY = 'spectra:yt:bar-color';
+const DEFAULT_BAR_COLOR = '#01f799';
+
+function setBarColor(c, persist) {
+  document.documentElement.style.setProperty('--bar-color', c);
+  document.getElementById('bar-color').value = c;
+  if (persist === false) return;
+  try {
+    if (c === DEFAULT_BAR_COLOR) localStorage.removeItem(COLOR_PREF_KEY);
+    else localStorage.setItem(COLOR_PREF_KEY, c);
+  } catch (e) {}
+}
+
 try {
   document.getElementById('hide-current').checked = localStorage.getItem(HIDE_PREF_KEY) === '1';
   const savedToken = localStorage.getItem(TOKEN_PREF_KEY);
   if (savedToken && ACTIONS[savedToken]) document.getElementById('token-select').value = savedToken;
   const savedAddr = localStorage.getItem(ADDR_PREF_KEY);
   if (savedAddr) document.getElementById('addr-input').value = savedAddr;
+  const savedColor = localStorage.getItem(COLOR_PREF_KEY);
+  if (savedColor) setBarColor(savedColor, false);
 } catch (e) {}
 
 document.getElementById('refresh').addEventListener('click', () => load('force'));
@@ -1270,6 +1323,12 @@ document.getElementById('addr-clear').addEventListener('click', () => {
 document.getElementById('hide-current').addEventListener('change', (e) => {
   try { localStorage.setItem(HIDE_PREF_KEY, e.target.checked ? '1' : '0'); } catch (err) {}
   load('use-cache');
+});
+document.getElementById('bar-color').addEventListener('input', (e) => {
+  setBarColor(e.target.value);
+});
+document.getElementById('color-reset').addEventListener('click', () => {
+  setBarColor(DEFAULT_BAR_COLOR);
 });
 const tokenSlug = () => document.getElementById('token-select').value.toLowerCase();
 document.getElementById('dl-total').addEventListener('click', () => {
