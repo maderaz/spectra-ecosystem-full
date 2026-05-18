@@ -151,14 +151,16 @@
   }
   .chart {
     position: relative;
-    height: 420px;
+    height: 380px;
     display: flex;
     align-items: flex-end;
     gap: 3px;
+    border-left: 1px solid rgba(255,255,255,0.18);
+    border-bottom: 1px solid rgba(255,255,255,0.18);
   }
   .grid {
     position: absolute;
-    left: 0; right: 0; top: 0; bottom: 36px;
+    left: 0; right: 0; top: 0; bottom: 0;
     pointer-events: none;
   }
   .grid-line {
@@ -172,14 +174,14 @@
     left: -80px;
     transform: translateY(-50%);
     font-size: 11px;
-    color: rgba(255,255,255,0.55);
+    color: rgba(255,255,255,0.6);
     font-variant-numeric: tabular-nums;
     width: 64px;
     text-align: right;
   }
   .bar-col {
     flex: 1;
-    height: calc(100% - 36px);
+    height: 100%;
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
@@ -202,15 +204,20 @@
   .bar-col:hover .bar { filter: brightness(1.15); }
   .bar-col:hover .bar.zero { background: rgba(255,255,255,0.15); }
 
-  .x-label {
-    position: absolute;
-    bottom: 8px;
-    left: 50%;
-    transform: translateX(-50%);
+  .x-axis {
+    display: flex;
+    gap: 3px;
+    margin-top: 10px;
+  }
+  .x-tick {
+    flex: 1;
+    text-align: center;
     font-size: 10px;
-    color: rgba(255,255,255,0.55);
+    color: rgba(255,255,255,0.6);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
+    min-width: 0;
+    overflow: visible;
   }
 
   .tooltip {
@@ -355,6 +362,7 @@
         <div class="chart" id="chart-total">
           <div class="grid" id="grid-total"></div>
         </div>
+        <div class="x-axis" id="xaxis-total"></div>
         <div class="tooltip" id="tt-total"></div>
       </div>
     </div>
@@ -369,6 +377,7 @@
         <div class="chart" id="chart-buy">
           <div class="grid" id="grid-buy"></div>
         </div>
+        <div class="x-axis" id="xaxis-buy"></div>
         <div class="tooltip" id="tt-buy"></div>
       </div>
     </div>
@@ -383,6 +392,7 @@
         <div class="chart" id="chart-sell">
           <div class="grid" id="grid-sell"></div>
         </div>
+        <div class="x-axis" id="xaxis-sell"></div>
         <div class="tooltip" id="tt-sell"></div>
       </div>
     </div>
@@ -753,23 +763,28 @@ function aggregateDailyGroupsByCount(groups, days) {
 }
 
 function buildBarChart(opts) {
-  const { data, maxAmt, chartEl, gridEl, tooltipEl, labelStep, labelKey, dateKey, countMode } = opts;
+  const { data, maxAmt, chartEl, gridEl, xaxisEl, tooltipEl, labelStep, labelKey, dateKey, countMode } = opts;
   chartEl.innerHTML = '';
   chartEl.appendChild(gridEl);
   gridEl.innerHTML = '';
+  xaxisEl.innerHTML = '';
   tooltipEl.classList.remove('visible');
 
   const max = maxAmt > 0 ? maxAmt : 1;
-  [0, 0.25, 0.5, 0.75, 1.0].forEach(t => {
+  // Skip 0% — the chart's border-bottom serves as the X-axis baseline.
+  [0.25, 0.5, 0.75, 1.0].forEach(t => {
     const line = document.createElement('div');
     line.className = 'grid-line';
     line.style.bottom = (t * 100) + '%';
+    gridEl.appendChild(line);
+  });
+  // Y-axis labels (including 0 at the baseline).
+  [0, 0.25, 0.5, 0.75, 1.0].forEach(t => {
     const lbl = document.createElement('div');
     lbl.className = 'grid-label';
     lbl.style.bottom = (t * 100) + '%';
     lbl.textContent = countMode ? String(Math.round(t * max)) : fmtUsd(t * max);
-    line.appendChild(lbl);
-    gridEl.appendChild(line);
+    gridEl.appendChild(lbl);
   });
 
   data.forEach((d, idx) => {
@@ -779,15 +794,9 @@ function buildBarChart(opts) {
     bar.className = 'bar' + (d.amount === 0 ? ' zero' : '');
     if (d.amount > 0) bar.style.height = ((d.amount / max) * 100) + '%';
     col.appendChild(bar);
-    if (idx % labelStep === 0 || idx === data.length - 1) {
-      const x = document.createElement('div');
-      x.className = 'x-label';
-      x.textContent = d[labelKey];
-      col.appendChild(x);
-    }
     col.addEventListener('mouseenter', () => {
       const amtTxt = d.amount === 0
-        ? 'No purchases'
+        ? 'No activity'
         : (countMode ? d.amount + ' transaction' + (d.amount === 1 ? '' : 's') : '$' + d.amount.toLocaleString('en-US', {maximumFractionDigits: 2}));
       tooltipEl.innerHTML =
         '<div class="tt-date">' + d[dateKey] + '</div>' +
@@ -806,6 +815,15 @@ function buildBarChart(opts) {
     });
     col.addEventListener('mouseleave', () => tooltipEl.classList.remove('visible'));
     chartEl.appendChild(col);
+
+    const tick = document.createElement('div');
+    tick.className = 'x-tick';
+    if (idx % labelStep === 0 || idx === data.length - 1) {
+      tick.textContent = d[labelKey];
+    } else {
+      tick.innerHTML = '&nbsp;';
+    }
+    xaxisEl.appendChild(tick);
   });
 }
 
@@ -833,6 +851,7 @@ function render(total, buy, sell, mode) {
       data, maxAmt: max,
       chartEl: document.getElementById('chart-' + suffix),
       gridEl: document.getElementById('grid-' + suffix),
+      xaxisEl: document.getElementById('xaxis-' + suffix),
       tooltipEl: document.getElementById('tt-' + suffix),
       labelStep: data.length > 20 ? Math.ceil(data.length / 12) : 1,
       labelKey: 'date', dateKey: 'iso',
@@ -845,29 +864,26 @@ function render(total, buy, sell, mode) {
 }
 
 function drawBarChartToCanvas(ctx, W, H, data, opts) {
-  const LEFT = 88, RIGHT = 24, TOP = 20, BOTTOM = 36;
+  const LEFT = 92, RIGHT = 28, TOP = 20, BOTTOM = 40;
   const plotW = W - LEFT - RIGHT;
   const plotH = H - TOP - BOTTOM;
   const max = Math.max(...data.map(d => d.amount), 1);
   const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  const AXIS = '#9aa0a6';
+  const GRID = 'rgba(140,140,140,0.22)';
 
-  ctx.font = `11px ${font}`;
-  ctx.textAlign = 'right';
-  ctx.textBaseline = 'middle';
-  [0, 0.25, 0.5, 0.75, 1.0].forEach(t => {
-    const y = TOP + plotH - t * plotH;
-    ctx.strokeStyle = 'rgba(140,140,140,0.25)';
-    ctx.lineWidth = 1;
+  // Inner grid lines (skip 0% — it's the X-axis baseline).
+  ctx.strokeStyle = GRID;
+  ctx.lineWidth = 1;
+  [0.25, 0.5, 0.75, 1.0].forEach(t => {
+    const y = Math.round(TOP + plotH - t * plotH) + 0.5;
     ctx.beginPath();
-    ctx.moveTo(LEFT, Math.round(y) + 0.5);
-    ctx.lineTo(LEFT + plotW, Math.round(y) + 0.5);
+    ctx.moveTo(LEFT, y);
+    ctx.lineTo(LEFT + plotW, y);
     ctx.stroke();
-    const v = t * max;
-    const txt = opts.countMode ? Math.round(v).toString() : fmtUsd(v);
-    ctx.fillStyle = '#9aa0a6';
-    ctx.fillText(txt, LEFT - 12, y);
   });
 
+  // Bars first so the axis lines render on top.
   const gap = opts.gap != null ? opts.gap : 3;
   const barW = Math.max(1, (plotW - gap * (data.length - 1)) / data.length);
   ctx.fillStyle = '#01f799';
@@ -879,15 +895,37 @@ function drawBarChartToCanvas(ctx, W, H, data, opts) {
     ctx.fillRect(x, y, barW, h);
   });
 
+  // Axis lines (Y vertical + X horizontal baseline).
+  ctx.strokeStyle = 'rgba(170,170,170,0.55)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(LEFT + 0.5, TOP);
+  ctx.lineTo(LEFT + 0.5, TOP + plotH + 0.5);
+  ctx.lineTo(LEFT + plotW, TOP + plotH + 0.5);
+  ctx.stroke();
+
+  // Y-axis labels (right-aligned, 12px from the axis line).
+  ctx.font = `11px ${font}`;
+  ctx.fillStyle = AXIS;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  [0, 0.25, 0.5, 0.75, 1.0].forEach(t => {
+    const y = TOP + plotH - t * plotH;
+    const v = t * max;
+    const txt = opts.countMode ? Math.round(v).toString() : fmtUsd(v);
+    ctx.fillText(txt, LEFT - 12, y);
+  });
+
+  // X-axis labels below the baseline.
   ctx.font = `10px ${font}`;
-  ctx.fillStyle = '#9aa0a6';
+  ctx.fillStyle = AXIS;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   const labelStep = opts.labelStep || (data.length > 20 ? Math.ceil(data.length / 12) : 1);
   data.forEach((d, i) => {
     if (i % labelStep !== 0 && i !== data.length - 1) return;
     const x = LEFT + i * (barW + gap) + barW / 2;
-    ctx.fillText(d[opts.labelKey], x, TOP + plotH + 10);
+    ctx.fillText(d[opts.labelKey], x, TOP + plotH + 12);
   });
 }
 
