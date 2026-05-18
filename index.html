@@ -321,7 +321,7 @@
 const API_URL = 'https://api.goldsky.com/api/public/project_cm55feuq3euos01xjb3w504ls/subgraphs/spectra-flare/prod/gn';
 const PAGE_SIZE = 1000;
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const CACHE_KEY = 'spectra:yt:cache:v1';
+const CACHE_KEY = 'spectra:yt:cache:v2';
 const CACHE_WINDOW_DAYS = 90;
 
 let cache = { txs: [], fetchedAt: 0, windowStartTs: 0, schema: null };
@@ -335,9 +335,11 @@ const QUERY = `
       orderDirection: asc
     ) {
       id
+      address
       createdAtTimestamp
       type
       valueUnderlying
+      ibtRate
       amountsIn {
         amount
         asset { id symbol decimals type price { value } }
@@ -414,9 +416,11 @@ function compressTx(tx) {
   const ca = (a) => [a.amount, a.asset?.type || '', a.asset?.decimals ?? 18, a.asset?.price?.value || null, a.asset?.symbol || ''];
   return {
     i: tx.id,
+    a: tx.address || '',
     ts: Number(tx.createdAtTimestamp),
     ty: tx.type || '',
     vu: tx.valueUnderlying || '0',
+    ir: tx.ibtRate || null,
     in: (tx.amountsIn || []).map(ca),
     out: (tx.amountsOut || []).map(ca),
   };
@@ -429,9 +433,11 @@ function decompressTx(c) {
   });
   return {
     id: c.i,
+    address: c.a || '',
     createdAtTimestamp: String(c.ts),
     type: c.ty,
     valueUnderlying: c.vu,
+    ibtRate: c.ir,
     amountsIn: (c.in || []).map(xa),
     amountsOut: (c.out || []).map(xa),
   };
@@ -516,49 +522,111 @@ async function ensureCache(mode) {
   return { source: isFullRefetch ? 'full-fetch' : 'incremental', fetched: newTxs.length, cacheAgeMs: 0 };
 }
 
-function isYtType(t) {
-  if (!t) return false;
-  const s = String(t).toUpperCase();
-  return s === 'YT' || s === 'FYT' || s === 'YIELD_TOKEN' || s.includes('YIELD');
-}
-function isUnderlyingType(t) {
-  if (!t) return false;
-  const s = String(t).toUpperCase();
-  return s === 'UNDERLYING' || s === 'ASSET' || s === 'BASE';
-}
-function isIbtType(t) {
-  if (!t) return false;
-  return String(t).toUpperCase() === 'IBT';
+function isIbtType(t) { return String(t || '').toUpperCase() === 'IBT'; }
+function isPtType(t)  { return String(t || '').toUpperCase() === 'PT'; }
+
+function txHash(tx) {
+  const id = tx.id || '';
+  if (id.startsWith('0x') && id.length >= 66) return id.slice(0, 66).toLowerCase();
+  const dash = id.indexOf('-');
+  return (dash > 0 ? id.slice(0, dash) : id).toLowerCase();
 }
 
-function isBuyYt(tx) {
-  return (tx.amountsOut || []).some(a => a.asset && isYtType(a.asset.type));
-}
-
-function txUsdValue(tx) {
-  const tryPriced = (matcher) => {
-    for (const a of tx.amountsIn || []) {
-      if (a.asset && matcher(a.asset.type) && a.asset.price && a.asset.price.value) {
-        const amt = Number(a.amount) / Math.pow(10, a.asset.decimals || 18);
-        return amt * parseFloat(a.asset.price.value);
-      }
-    }
-    return null;
-  };
-  let v = tryPriced(isUnderlyingType);
-  if (v == null) v = tryPriced(isIbtType);
-  if (v == null) {
-    for (const a of tx.amountsIn || []) {
-      if (a.asset && a.asset.price && a.asset.price.value) {
-        const amt = Number(a.amount) / Math.pow(10, a.asset.decimals || 18);
-        return amt * parseFloat(a.asset.price.value);
-      }
-    }
+function groupByHash(txs) {
+  const m = new Map();
+  for (const tx of txs) {
+    const h = txHash(tx);
+    if (!m.has(h)) m.set(h, []);
+    m.get(h).push(tx);
   }
-  return v ?? 0;
+  return m;
 }
 
-function aggregateDaily(txs, days) {
+function classifyGroup(events) {
+  const types = new Set(events.map(e => e.type));
+  const get = (t) => events.find(e => e.type === t);
+
+  if (types.has('AMM_ADD_LIQUIDITY')) return 'ADD_LIQUIDITY';
+  if (types.has('AMM_REMOVE_LIQUIDITY') || types.has('AMM_REMOVE_LIQUIDITY_ONE')) return 'REMOVE_LIQUIDITY';
+
+  const hasAMM = types.has('AMM_EXCHANGE');
+  const hasDeposit = types.has('FUTURE_VAULT_DEPOSIT');
+  const hasWithdraw = types.has('FUTURE_VAULT_WITHDRAW');
+
+  if (hasAMM && hasDeposit) {
+    const amm = get('AMM_EXCHANGE');
+    const ammHasPtIn = (amm.amountsIn || []).some(a => isPtType(a.asset?.type));
+    if (ammHasPtIn) return 'BUY_YT';
+    return 'OTHER_COMPOUND';
+  }
+  if (hasAMM && hasWithdraw) {
+    const amm = get('AMM_EXCHANGE');
+    const ammHasPtOut = (amm.amountsOut || []).some(a => isPtType(a.asset?.type));
+    if (ammHasPtOut) return 'SELL_YT';
+    return 'OTHER_COMPOUND';
+  }
+  if (hasDeposit && !hasAMM && !hasWithdraw) return 'SPLIT';
+  if (hasWithdraw && !hasAMM && !hasDeposit) return 'COMBINE';
+
+  if (hasAMM) {
+    const amm = get('AMM_EXCHANGE');
+    const ptIn = (amm.amountsIn || []).some(a => isPtType(a.asset?.type));
+    const ptOut = (amm.amountsOut || []).some(a => isPtType(a.asset?.type));
+    if (ptOut && !ptIn) return 'BUY_PT';
+    if (ptIn && !ptOut) return 'SELL_PT';
+    return 'SWAP';
+  }
+
+  return 'OTHER';
+}
+
+function groupUsdValue(events, classification) {
+  const dep = events.find(e => e.type === 'FUTURE_VAULT_DEPOSIT');
+  const amm = events.find(e => e.type === 'AMM_EXCHANGE');
+  const wdr = events.find(e => e.type === 'FUTURE_VAULT_WITHDRAW');
+
+  const ibtAmountIn = (ev) => {
+    if (!ev) return 0;
+    for (const a of ev.amountsIn || []) {
+      if (a.asset && isIbtType(a.asset.type)) {
+        return Number(a.amount) / Math.pow(10, a.asset.decimals || 18);
+      }
+    }
+    return 0;
+  };
+  const ibtAmountOut = (ev) => {
+    if (!ev) return 0;
+    for (const a of ev.amountsOut || []) {
+      if (a.asset && isIbtType(a.asset.type)) {
+        return Number(a.amount) / Math.pow(10, a.asset.decimals || 18);
+      }
+    }
+    return 0;
+  };
+  const ibtPrice = (ev) => {
+    if (!ev) return 0;
+    for (const a of [...(ev.amountsIn||[]), ...(ev.amountsOut||[])]) {
+      if (a.asset && isIbtType(a.asset.type) && a.asset.price && a.asset.price.value) {
+        return parseFloat(a.asset.price.value);
+      }
+    }
+    return 0;
+  };
+
+  if (classification === 'BUY_YT') {
+    const netIbt = ibtAmountIn(dep) - ibtAmountOut(amm);
+    const price = ibtPrice(dep) || ibtPrice(amm);
+    return netIbt * price;
+  }
+  if (classification === 'SELL_YT') {
+    const netIbt = ibtAmountOut(wdr) - ibtAmountIn(amm);
+    const price = ibtPrice(wdr) || ibtPrice(amm);
+    return netIbt * price;
+  }
+  return 0;
+}
+
+function emptyDailyBuckets(days) {
   const buckets = new Map();
   const today = new Date();
   const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
@@ -568,14 +636,25 @@ function aggregateDaily(txs, days) {
     const iso = isoDay(d);
     buckets.set(iso, { date: fmtMonthDay(d), iso, amount: 0, count: 0 });
   }
-  for (const tx of txs) {
-    const d = new Date(Number(tx.createdAtTimestamp) * 1000);
-    const iso = isoDay(d);
+  return buckets;
+}
+
+function aggregateDailyGroups(groups, days) {
+  const buckets = emptyDailyBuckets(days);
+  for (const g of groups) {
+    const iso = isoDay(new Date(g.ts * 1000));
     const b = buckets.get(iso);
-    if (b) {
-      b.amount += tx.usd;
-      b.count += 1;
-    }
+    if (b) { b.amount += g.usd; b.count += 1; }
+  }
+  return Array.from(buckets.values());
+}
+
+function aggregateDailyGroupsByCount(groups, days) {
+  const buckets = emptyDailyBuckets(days);
+  for (const g of groups) {
+    const iso = isoDay(new Date(g.ts * 1000));
+    const b = buckets.get(iso);
+    if (b) { b.amount += 1; b.count += 1; }
   }
   return Array.from(buckets.values());
 }
@@ -728,53 +807,70 @@ async function load(refreshMode) {
     const all = cache.txs.filter(t => Number(t.createdAtTimestamp) >= sinceTs);
 
     const txByType = new Map();
-    const ytInByTxType = new Map();
-    const ytOutByTxType = new Map();
     for (const tx of all) {
       const t = tx.type || '(none)';
       txByType.set(t, (txByType.get(t) || 0) + 1);
-      if ((tx.amountsIn || []).some(a => a.asset && isYtType(a.asset.type))) {
-        ytInByTxType.set(t, (ytInByTxType.get(t) || 0) + 1);
-      }
-      if ((tx.amountsOut || []).some(a => a.asset && isYtType(a.asset.type))) {
-        ytOutByTxType.set(t, (ytOutByTxType.get(t) || 0) + 1);
-      }
     }
 
-    const buys = all.filter(isBuyYt).map(tx => Object.assign(tx, { usd: txUsdValue(tx) }));
-    const buysWithUsd = buys.filter(t => t.usd > 0);
+    const groups = groupByHash(all);
+    const classByGroup = new Map();
+    const classCounts = new Map();
+    for (const [hash, events] of groups) {
+      const c = classifyGroup(events);
+      classByGroup.set(hash, c);
+      classCounts.set(c, (classCounts.get(c) || 0) + 1);
+    }
 
-    const dailyUsd = aggregateDaily(buys, days);
+    const buyYtGroups = [];
+    for (const [hash, events] of groups) {
+      if (classByGroup.get(hash) === 'BUY_YT') {
+        const usd = groupUsdValue(events, 'BUY_YT');
+        const ts = Math.min(...events.map(e => Number(e.createdAtTimestamp)));
+        buyYtGroups.push({ hash, events, usd, ts });
+      }
+    }
+    buyYtGroups.sort((a, b) => b.ts - a.ts);
+    const buysWithUsd = buyYtGroups.filter(g => g.usd > 0);
+
+    const dailyUsd = aggregateDailyGroups(buyYtGroups, days);
     const totalUsd = dailyUsd.reduce((s,d) => s + d.amount, 0);
 
     let mode = 'usd';
     let daily = dailyUsd;
-    if (totalUsd === 0 && buys.length > 0) {
+    if (totalUsd === 0 && buyYtGroups.length > 0) {
       mode = 'count';
-      daily = aggregateDailyByCount(buys, days);
+      daily = aggregateDailyGroupsByCount(buyYtGroups, days);
     }
     const weekly = aggregateWeekly(daily);
 
-    renderStats(dailyUsd, buys.length, mode === 'count');
+    renderStats(dailyUsd, buyYtGroups.length, mode === 'count');
     render(daily, weekly, mode);
 
     const fmtMap = (m) => Array.from(m.entries()).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `${escapeHtml(k)}×${v}`).join(' · ') || '(none)';
-    const ytRelated = (schema.queryFields || []).filter(f => /yt|yield|purchas/i.test(f));
     const ageText = cacheInfo.cacheAgeMs === 0
       ? 'just now'
       : (cacheInfo.cacheAgeMs < 60000 ? Math.round(cacheInfo.cacheAgeMs/1000) + 's ago' : Math.round(cacheInfo.cacheAgeMs/60000) + 'm ago');
     const cacheLine = cacheInfo.source === 'memory'
       ? `<b>Cache hit:</b> ${cache.txs.length} tx in memory · last fetched ${ageText} · no API call`
       : `<b>Cache ${cacheInfo.source}:</b> +${cacheInfo.fetched} new tx · ${cache.txs.length} total cached (last ${CACHE_WINDOW_DAYS}d)`;
+
+    const samples = buyYtGroups.slice(0, 12).map(g => {
+      const t = new Date(g.ts * 1000);
+      const hh = String(t.getUTCHours()).padStart(2,'0') + ':' + String(t.getUTCMinutes()).padStart(2,'0');
+      const typesIn = g.events.map(e => e.type).join('+');
+      const hashShort = g.hash.slice(0, 10) + '…' + g.hash.slice(-4);
+      const usdTxt = g.usd > 0 ? '$' + g.usd.toLocaleString('en-US',{maximumFractionDigits:2}) : '<i style="color:#ff8888">$0</i>';
+      return `  ${escapeHtml(hh)} UTC · <span style="color:#01f799">${escapeHtml(hashShort)}</span> · ${escapeHtml(typesIn)} · ${usdTxt}`;
+    }).join('<br>');
+
     const parts = [];
     parts.push(cacheLine);
-    parts.push(`<b>Window:</b> last ${days}d → ${all.length} tx · <b>Matched as Buy YT:</b> ${buys.length} · <b>Priced:</b> ${buysWithUsd.length}`);
-    parts.push(`<b>By TransactionType (window):</b> ${fmtMap(txByType)}`);
-    parts.push(`<b>Tx with YT in amountsOut:</b> ${fmtMap(ytOutByTxType)}`);
-    parts.push(`<b>Tx with YT in amountsIn:</b> ${fmtMap(ytInByTxType)}`);
-    if (schema.txTypes && schema.txTypes.length) parts.push(`<b>Schema TransactionType enum:</b> ${schema.txTypes.map(escapeHtml).join(', ')}`);
-    if (ytRelated.length) parts.push(`<b>YT-related root query fields:</b> ${ytRelated.map(escapeHtml).join(', ')}`);
-    if (mode === 'count') parts.push(`<b>⚠ No USD prices on matched txs — bars show transaction count per day.</b>`);
+    parts.push(`<b>Window:</b> last ${days}d → ${all.length} subgraph tx in ${groups.size} on-chain tx`);
+    parts.push(`<b>Classification of on-chain tx:</b> ${fmtMap(classCounts)}`);
+    parts.push(`<b>Matched as Buy YT:</b> ${buyYtGroups.length} · <b>Priced:</b> ${buysWithUsd.length}`);
+    parts.push(`<b>By subgraph TransactionType:</b> ${fmtMap(txByType)}`);
+    if (samples) parts.push(`<b>Sample Buy YT (most recent):</b><br>${samples}`);
+    if (mode === 'count') parts.push(`<b>⚠ Couldn't compute USD for any Buy YT (no IBT price?) — bars show count per day.</b>`);
     if (all.length === 0) parts.push(`<b>⚠ No transactions in window. Try a wider time range.</b>`);
     setDiag(parts.join('<br>'));
 
@@ -786,25 +882,6 @@ async function load(refreshMode) {
   } finally {
     document.getElementById('refresh').disabled = false;
   }
-}
-
-function aggregateDailyByCount(txs, days) {
-  const buckets = new Map();
-  const today = new Date();
-  const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(todayUTC);
-    d.setUTCDate(d.getUTCDate() - i);
-    const iso = isoDay(d);
-    buckets.set(iso, { date: fmtMonthDay(d), iso, amount: 0, count: 0 });
-  }
-  for (const tx of txs) {
-    const d = new Date(Number(tx.createdAtTimestamp) * 1000);
-    const iso = isoDay(d);
-    const b = buckets.get(iso);
-    if (b) { b.amount += 1; b.count += 1; }
-  }
-  return Array.from(buckets.values());
 }
 
 document.getElementById('refresh').addEventListener('click', () => load('force'));
