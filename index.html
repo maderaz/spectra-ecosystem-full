@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>YT Token Purchases — Daily & Weekly</title>
+<title>Spectra Token Activity — Daily Volumes</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -73,7 +73,7 @@
     align-items: center;
     gap: 12px;
   }
-  .days-select {
+  .days-select, .token-select {
     background: #0a0a0a;
     color: #fff;
     border: 1px solid rgba(255,255,255,0.15);
@@ -83,7 +83,15 @@
     font-family: inherit;
     cursor: pointer;
   }
-  .days-select:focus { outline: none; border-color: rgba(1,247,153,0.5); }
+  .days-select:focus, .token-select:focus { outline: none; border-color: rgba(1,247,153,0.5); }
+  .token-select {
+    font-weight: 600;
+    color: #01f799;
+    border-color: rgba(1,247,153,0.35);
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+  .token-select:hover { background: rgba(1,247,153,0.06); }
   .refresh-btn {
     background: transparent;
     color: #01f799;
@@ -148,7 +156,6 @@
     align-items: flex-end;
     gap: 3px;
   }
-  .chart.weekly { gap: 8px; }
   .grid {
     position: absolute;
     left: 0; right: 0; top: 0; bottom: 36px;
@@ -205,7 +212,6 @@
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
-  .chart.weekly .x-label { font-size: 11px; }
 
   .tooltip {
     position: absolute;
@@ -302,10 +308,15 @@
   <header>
     <div class="header-row">
       <div>
-        <h1>YT Token Purchases</h1>
-        <div class="subtitle" id="subtitle">Buy-side activity over the last 38 days</div>
+        <h1 id="title">YT Token Activity</h1>
+        <div class="subtitle" id="subtitle">Combined buy + sell volume over the last 38 days</div>
       </div>
       <div class="controls">
+        <select class="token-select" id="token-select" title="Select token type to analyze">
+          <option value="YT" selected>YT (Yield Token)</option>
+          <option value="PT">PT (Principal Token)</option>
+          <option value="LP">LP (Liquidity)</option>
+        </select>
         <select class="days-select" id="days-select">
           <option value="14">14 days</option>
           <option value="30">30 days</option>
@@ -316,16 +327,16 @@
         </select>
         <button class="refresh-btn" id="refresh" title="Incrementally fetch new transactions">Refresh</button>
         <button class="refresh-btn" id="clear-cache" title="Drop cached data and re-fetch from scratch">Clear cache</button>
-        <label class="hide-toggle" title="Drop the current (still-running) day/week so partial data doesn't skew the view">
+        <label class="hide-toggle" title="Drop the current (still-running) day so partial data doesn't skew the view">
           <input type="checkbox" id="hide-current"> Hide in-progress
         </label>
       </div>
     </div>
     <div class="stats" id="stats">
       <div class="stat"><div class="label">Total Volume</div><div class="value" id="stat-total">—</div></div>
-      <div class="stat"><div class="label">Buy Transactions</div><div class="value neutral" id="stat-count">—</div></div>
-      <div class="stat"><div class="label">Peak Day</div><div class="value" id="stat-peak">—</div></div>
-      <div class="stat"><div class="label">Daily Average</div><div class="value neutral" id="stat-avg">—</div></div>
+      <div class="stat"><div class="label">Total Transactions</div><div class="value neutral" id="stat-count">—</div></div>
+      <div class="stat"><div class="label" id="stat-buy-label">Buy Volume</div><div class="value" id="stat-buy">—</div></div>
+      <div class="stat"><div class="label" id="stat-sell-label">Sell Volume</div><div class="value" id="stat-sell">—</div></div>
     </div>
   </header>
 
@@ -336,33 +347,47 @@
   <div id="content" class="hidden">
     <div class="chart-section">
       <div class="chart-header">
-        <h2>Daily Volume</h2>
-        <button class="download-btn" id="dl-daily" title="Download chart as transparent PNG">Download PNG</button>
+        <h2 id="h2-total">Daily Total Volume</h2>
+        <button class="download-btn" id="dl-total" title="Download chart as transparent PNG">Download PNG</button>
       </div>
-      <div class="section-sub">Sum of all Buy YT transaction values per day</div>
+      <div class="section-sub" id="sub-total">Combined buy + sell volume per day</div>
       <div class="chart-wrap">
-        <div class="chart" id="chart">
-          <div class="grid" id="grid"></div>
+        <div class="chart" id="chart-total">
+          <div class="grid" id="grid-total"></div>
         </div>
-        <div class="tooltip" id="tooltip"></div>
+        <div class="tooltip" id="tt-total"></div>
       </div>
     </div>
 
     <div class="chart-section">
       <div class="chart-header">
-        <h2>Weekly Volume</h2>
-        <button class="download-btn" id="dl-weekly" title="Download chart as transparent PNG">Download PNG</button>
+        <h2 id="h2-buy">Daily Buy Volume</h2>
+        <button class="download-btn" id="dl-buy" title="Download chart as transparent PNG">Download PNG</button>
       </div>
-      <div class="section-sub">Sum of all Buy YT transaction values per 7-day window</div>
+      <div class="section-sub" id="sub-buy">Buy volume per day</div>
       <div class="chart-wrap">
-        <div class="chart weekly" id="wchart">
-          <div class="grid" id="wgrid"></div>
+        <div class="chart" id="chart-buy">
+          <div class="grid" id="grid-buy"></div>
         </div>
-        <div class="tooltip" id="wtooltip"></div>
+        <div class="tooltip" id="tt-buy"></div>
       </div>
     </div>
 
-    <footer>Hover bars for detail · Aggregated live from on-chain Buy YT events via Goldsky</footer>
+    <div class="chart-section">
+      <div class="chart-header">
+        <h2 id="h2-sell">Daily Sell Volume</h2>
+        <button class="download-btn" id="dl-sell" title="Download chart as transparent PNG">Download PNG</button>
+      </div>
+      <div class="section-sub" id="sub-sell">Sell volume per day</div>
+      <div class="chart-wrap">
+        <div class="chart" id="chart-sell">
+          <div class="grid" id="grid-sell"></div>
+        </div>
+        <div class="tooltip" id="tt-sell"></div>
+      </div>
+    </div>
+
+    <footer>Hover bars for detail · Aggregated live from on-chain events via Goldsky</footer>
   </div>
 </div>
 
@@ -371,6 +396,13 @@ const API_URL = 'https://api.goldsky.com/api/public/project_cm55feuq3euos01xjb3w
 const PAGE_SIZE = 1000;
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const CACHE_KEY = 'spectra:yt:cache:v3';
+const TOKEN_PREF_KEY = 'spectra:yt:token';
+
+const ACTIONS = {
+  YT: { buy: 'BUY_YT',         sell: 'SELL_YT',           buyLabel: 'Buy',    sellLabel: 'Sell',   title: 'YT Token Activity' },
+  PT: { buy: 'BUY_PT',         sell: 'SELL_PT',           buyLabel: 'Buy',    sellLabel: 'Sell',   title: 'PT Token Activity' },
+  LP: { buy: 'ADD_LIQUIDITY',  sell: 'REMOVE_LIQUIDITY',  buyLabel: 'Add',    sellLabel: 'Remove', title: 'LP Activity' },
+};
 
 function daysSinceJan1() {
   const now = new Date();
@@ -672,15 +704,17 @@ function groupUsdValue(events, classification) {
   const dep = events.find(e => e.type === 'FUTURE_VAULT_DEPOSIT');
   const amm = events.find(e => e.type === 'AMM_EXCHANGE');
   const wdr = events.find(e => e.type === 'FUTURE_VAULT_WITHDRAW');
+  const addL = events.find(e => e.type === 'AMM_ADD_LIQUIDITY');
+  const rmL = events.find(e => e.type === 'AMM_REMOVE_LIQUIDITY' || e.type === 'AMM_REMOVE_LIQUIDITY_ONE');
   const vu = (ev) => ev ? Number(ev.valueUnderlying || 0) / Math.pow(10, u.decimals) : 0;
 
-  if (classification === 'BUY_YT') {
-    const net = vu(dep) - vu(amm);
-    return Math.max(0, net) * u.price;
-  }
-  if (classification === 'SELL_YT') {
-    const net = vu(wdr) - vu(amm);
-    return Math.max(0, net) * u.price;
+  switch (classification) {
+    case 'BUY_YT':  return Math.max(0, vu(dep) - vu(amm)) * u.price;
+    case 'SELL_YT': return Math.max(0, vu(wdr) - vu(amm)) * u.price;
+    case 'BUY_PT':  return vu(amm) * u.price;
+    case 'SELL_PT': return vu(amm) * u.price;
+    case 'ADD_LIQUIDITY':    return vu(addL) * u.price;
+    case 'REMOVE_LIQUIDITY': return vu(rmL) * u.price;
   }
   return 0;
 }
@@ -716,24 +750,6 @@ function aggregateDailyGroupsByCount(groups, days) {
     if (b) { b.amount += 1; b.count += 1; }
   }
   return Array.from(buckets.values());
-}
-
-function aggregateWeekly(daily) {
-  const weeks = [];
-  for (let end = daily.length - 1; end >= 0; end -= 7) {
-    const start = Math.max(0, end - 6);
-    const slice = daily.slice(start, end + 1);
-    const startD = slice[0];
-    const endD = slice[slice.length - 1];
-    weeks.unshift({
-      label: startD.date + '–' + endD.date,
-      start: startD.iso,
-      end: endD.iso,
-      amount: slice.reduce((s, d) => s + d.amount, 0),
-      count: slice.reduce((s, d) => s + d.count, 0),
-    });
-  }
-  return weeks;
 }
 
 function buildBarChart(opts) {
@@ -793,41 +809,39 @@ function buildBarChart(opts) {
   });
 }
 
-function renderStats(dailyUsd, totalBuyCount, fallbackCountMode) {
-  const total = dailyUsd.reduce((s,d) => s + d.amount, 0);
-  const peak = dailyUsd.reduce((m,d) => Math.max(m, d.amount), 0);
-  const avg = total / dailyUsd.length;
-  document.getElementById('stat-total').textContent = fallbackCountMode && total === 0 ? 'n/a' : fmtUsdFull(total);
-  document.getElementById('stat-count').textContent = (totalBuyCount ?? 0).toLocaleString('en-US');
-  document.getElementById('stat-peak').textContent = fallbackCountMode && peak === 0 ? 'n/a' : fmtUsdFull(peak);
-  document.getElementById('stat-avg').textContent = fallbackCountMode && total === 0 ? 'n/a' : fmtUsdFull(avg);
+function renderStats(buyUsdDaily, sellUsdDaily, buyCount, sellCount, fallbackCountMode) {
+  const buyTot = buyUsdDaily.reduce((s,d) => s + d.amount, 0);
+  const sellTot = sellUsdDaily.reduce((s,d) => s + d.amount, 0);
+  const total = buyTot + sellTot;
+  const setVal = (id, v) => {
+    document.getElementById(id).textContent = fallbackCountMode && v === 0 ? 'n/a' : fmtUsdFull(v);
+  };
+  setVal('stat-total', total);
+  document.getElementById('stat-count').textContent = ((buyCount || 0) + (sellCount || 0)).toLocaleString('en-US');
+  setVal('stat-buy', buyTot);
+  setVal('stat-sell', sellTot);
 }
 
-let latestDaily = [], latestWeekly = [], latestMode = 'usd';
+let latestCharts = { total: [], buy: [], sell: [], mode: 'usd' };
 
-function render(daily, weekly, mode) {
-  latestDaily = daily; latestWeekly = weekly; latestMode = mode;
-  const dailyMax = Math.max(...daily.map(d => d.amount), 0);
-  const weeklyMax = Math.max(...weekly.map(d => d.amount), 0);
+function render(total, buy, sell, mode) {
+  latestCharts = { total, buy, sell, mode };
   const isCount = mode === 'count';
-  buildBarChart({
-    data: daily, maxAmt: dailyMax,
-    chartEl: document.getElementById('chart'),
-    gridEl: document.getElementById('grid'),
-    tooltipEl: document.getElementById('tooltip'),
-    labelStep: daily.length > 20 ? Math.ceil(daily.length / 12) : 1,
-    labelKey: 'date', dateKey: 'iso',
-    countMode: isCount,
-  });
-  buildBarChart({
-    data: weekly, maxAmt: weeklyMax,
-    chartEl: document.getElementById('wchart'),
-    gridEl: document.getElementById('wgrid'),
-    tooltipEl: document.getElementById('wtooltip'),
-    labelStep: 1,
-    labelKey: 'label', dateKey: 'label',
-    countMode: isCount,
-  });
+  const renderOne = (data, suffix) => {
+    const max = Math.max(...data.map(d => d.amount), 0);
+    buildBarChart({
+      data, maxAmt: max,
+      chartEl: document.getElementById('chart-' + suffix),
+      gridEl: document.getElementById('grid-' + suffix),
+      tooltipEl: document.getElementById('tt-' + suffix),
+      labelStep: data.length > 20 ? Math.ceil(data.length / 12) : 1,
+      labelKey: 'date', dateKey: 'iso',
+      countMode: isCount,
+    });
+  };
+  renderOne(total, 'total');
+  renderOne(buy, 'buy');
+  renderOne(sell, 'sell');
 }
 
 function drawBarChartToCanvas(ctx, W, H, data, opts) {
@@ -917,13 +931,29 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+function updateLabelsForToken(token, days, isYtd) {
+  const A = ACTIONS[token];
+  document.getElementById('title').textContent = A.title;
+  const windowTxt = isYtd ? `year to date (since Jan 1 · ${days} days)` : `over the last ${days} days`;
+  document.getElementById('subtitle').textContent =
+    `Combined ${A.buyLabel.toLowerCase()} + ${A.sellLabel.toLowerCase()} volume ${windowTxt}`;
+  document.getElementById('stat-buy-label').textContent = `${A.buyLabel} Volume`;
+  document.getElementById('stat-sell-label').textContent = `${A.sellLabel} Volume`;
+  document.getElementById('h2-total').textContent = `Daily Total Volume`;
+  document.getElementById('h2-buy').textContent = `Daily ${A.buyLabel} Volume`;
+  document.getElementById('h2-sell').textContent = `Daily ${A.sellLabel} Volume`;
+  document.getElementById('sub-total').textContent = `Combined ${A.buyLabel.toLowerCase()} + ${A.sellLabel.toLowerCase()} volume per day`;
+  document.getElementById('sub-buy').textContent = `${A.buyLabel} volume per day`;
+  document.getElementById('sub-sell').textContent = `${A.sellLabel} volume per day`;
+}
+
 async function load(refreshMode) {
+  const token = document.getElementById('token-select').value;
+  const A = ACTIONS[token];
   const sel = document.getElementById('days-select').value;
   const isYtd = sel === 'ytd';
   const days = isYtd ? daysSinceJan1() : parseInt(sel, 10);
-  document.getElementById('subtitle').textContent = isYtd
-    ? `Buy-side activity year to date (since Jan 1 · ${days} days)`
-    : `Buy-side activity over the last ${days} days`;
+  updateLabelsForToken(token, days, isYtd);
   document.getElementById('refresh').disabled = true;
 
   const hasCache = cache.txs.length > 0 || loadCacheFromStorage();
@@ -936,15 +966,8 @@ async function load(refreshMode) {
 
   try {
     const cacheInfo = await ensureCache(refreshMode || 'use-cache');
-    const schema = cache.schema || { assetTypes: [], txTypes: [], queryFields: [] };
     const sinceTs = Math.floor(Date.now() / 1000) - days * 86400;
     const all = cache.txs.filter(t => Number(t.createdAtTimestamp) >= sinceTs);
-
-    const txByType = new Map();
-    for (const tx of all) {
-      const t = tx.type || '(none)';
-      txByType.set(t, (txByType.get(t) || 0) + 1);
-    }
 
     const groups = groupByHash(all);
     const classByGroup = new Map();
@@ -955,35 +978,44 @@ async function load(refreshMode) {
       classCounts.set(c, (classCounts.get(c) || 0) + 1);
     }
 
-    const buyYtGroups = [];
+    const buyGroups = [], sellGroups = [];
     for (const [hash, events] of groups) {
-      if (classByGroup.get(hash) === 'BUY_YT') {
-        const usd = groupUsdValue(events, 'BUY_YT');
-        const ts = Math.min(...events.map(e => Number(e.createdAtTimestamp)));
-        buyYtGroups.push({ hash, events, usd, ts });
-      }
+      const c = classByGroup.get(hash);
+      if (c !== A.buy && c !== A.sell) continue;
+      const usd = groupUsdValue(events, c);
+      const ts = Math.min(...events.map(e => Number(e.createdAtTimestamp)));
+      const g = { hash, events, usd, ts, cls: c };
+      (c === A.buy ? buyGroups : sellGroups).push(g);
     }
-    buyYtGroups.sort((a, b) => b.ts - a.ts);
-    const buysWithUsd = buyYtGroups.filter(g => g.usd > 0);
+    buyGroups.sort((a, b) => b.ts - a.ts);
+    sellGroups.sort((a, b) => b.ts - a.ts);
+    const allTokenGroups = [...buyGroups, ...sellGroups];
 
     const hideCurrent = document.getElementById('hide-current').checked;
     const trim = (arr) => hideCurrent && arr.length > 1 ? arr.slice(0, -1) : arr;
 
-    const dailyUsdAll = aggregateDailyGroups(buyYtGroups, days);
-    const dailyUsd = trim(dailyUsdAll);
-    const totalUsd = dailyUsd.reduce((s,d) => s + d.amount, 0);
+    const totalUsdAll = aggregateDailyGroups(allTokenGroups, days);
+    const buyUsdAll = aggregateDailyGroups(buyGroups, days);
+    const sellUsdAll = aggregateDailyGroups(sellGroups, days);
+    const aggregateTotalUsd = totalUsdAll.reduce((s,d) => s + d.amount, 0);
 
     let mode = 'usd';
-    let daily = dailyUsd;
-    if (totalUsd === 0 && buyYtGroups.length > 0) {
+    let totalArr, buyArr, sellArr;
+    if (aggregateTotalUsd === 0 && allTokenGroups.length > 0) {
       mode = 'count';
-      daily = trim(aggregateDailyGroupsByCount(buyYtGroups, days));
+      totalArr = trim(aggregateDailyGroupsByCount(allTokenGroups, days));
+      buyArr = trim(aggregateDailyGroupsByCount(buyGroups, days));
+      sellArr = trim(aggregateDailyGroupsByCount(sellGroups, days));
+    } else {
+      totalArr = trim(totalUsdAll);
+      buyArr = trim(buyUsdAll);
+      sellArr = trim(sellUsdAll);
     }
-    const weekly = trim(aggregateWeekly(daily));
 
-    const buyCountShown = daily.reduce((s,d) => s + d.count, 0);
-    renderStats(dailyUsd, buyCountShown, mode === 'count');
-    render(daily, weekly, mode);
+    const buyCountShown = buyArr.reduce((s,d) => s + d.count, 0);
+    const sellCountShown = sellArr.reduce((s,d) => s + d.count, 0);
+    renderStats(trim(buyUsdAll), trim(sellUsdAll), buyCountShown, sellCountShown, mode === 'count');
+    render(totalArr, buyArr, sellArr, mode);
 
     const fmtMap = (m) => Array.from(m.entries()).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `${escapeHtml(k)}×${v}`).join(' · ') || '(none)';
     const ageText = cacheInfo.cacheAgeMs === 0
@@ -1000,24 +1032,23 @@ async function load(refreshMode) {
         return t ? t.value : 'local';
       } catch (e) { return 'local'; }
     })();
-    const samples = buyYtGroups.slice(0, 12).map(g => {
+    const samples = allTokenGroups.slice().sort((a,b)=>b.ts-a.ts).slice(0, 10).map(g => {
       const t = new Date(g.ts * 1000);
       const dd = String(t.getDate()).padStart(2,'0') + '/' + String(t.getMonth()+1).padStart(2,'0');
       const hh = String(t.getHours()).padStart(2,'0') + ':' + String(t.getMinutes()).padStart(2,'0');
-      const typesIn = g.events.map(e => e.type).join('+');
       const hashShort = g.hash.slice(0, 10) + '…' + g.hash.slice(-4);
+      const sideLabel = g.cls === A.buy ? A.buyLabel : A.sellLabel;
       const usdTxt = g.usd > 0 ? '$' + g.usd.toLocaleString('en-US',{maximumFractionDigits:2}) : '<i style="color:#ff8888">$0</i>';
-      return `  ${escapeHtml(dd)} ${escapeHtml(hh)} ${escapeHtml(tzLabel)} · <span style="color:#01f799">${escapeHtml(hashShort)}</span> · ${escapeHtml(typesIn)} · ${usdTxt}`;
+      return `  ${escapeHtml(dd)} ${escapeHtml(hh)} ${escapeHtml(tzLabel)} · <span style="color:#01f799">${escapeHtml(hashShort)}</span> · ${escapeHtml(sideLabel)} ${escapeHtml(token)} · ${usdTxt}`;
     }).join('<br>');
 
     const parts = [];
     parts.push(cacheLine);
     parts.push(`<b>Window:</b> last ${days}d → ${all.length} subgraph tx in ${groups.size} on-chain tx`);
     parts.push(`<b>Classification of on-chain tx:</b> ${fmtMap(classCounts)}`);
-    parts.push(`<b>Matched as Buy YT:</b> ${buyYtGroups.length} · <b>Priced:</b> ${buysWithUsd.length}`);
-    parts.push(`<b>By subgraph TransactionType:</b> ${fmtMap(txByType)}`);
-    if (samples) parts.push(`<b>Sample Buy YT (most recent):</b><br>${samples}`);
-    if (mode === 'count') parts.push(`<b>⚠ Couldn't compute USD for any Buy YT (no IBT price?) — bars show count per day.</b>`);
+    parts.push(`<b>${escapeHtml(token)}:</b> ${A.buyLabel} ${buyGroups.length} · ${A.sellLabel} ${sellGroups.length} · Total ${allTokenGroups.length}`);
+    if (samples) parts.push(`<b>Sample ${escapeHtml(token)} activity (most recent):</b><br>${samples}`);
+    if (mode === 'count') parts.push(`<b>⚠ Couldn't compute USD for any ${escapeHtml(token)} group — bars show count per day.</b>`);
     if (all.length === 0) parts.push(`<b>⚠ No transactions in window. Try a wider time range.</b>`);
     setDiag(parts.join('<br>'));
 
@@ -1034,6 +1065,8 @@ async function load(refreshMode) {
 const HIDE_PREF_KEY = 'spectra:yt:hide-current';
 try {
   document.getElementById('hide-current').checked = localStorage.getItem(HIDE_PREF_KEY) === '1';
+  const savedToken = localStorage.getItem(TOKEN_PREF_KEY);
+  if (savedToken && ACTIONS[savedToken]) document.getElementById('token-select').value = savedToken;
 } catch (e) {}
 
 document.getElementById('refresh').addEventListener('click', () => load('force'));
@@ -1043,19 +1076,29 @@ document.getElementById('clear-cache').addEventListener('click', () => {
   load('force');
 });
 document.getElementById('days-select').addEventListener('change', () => load('use-cache'));
+document.getElementById('token-select').addEventListener('change', (e) => {
+  try { localStorage.setItem(TOKEN_PREF_KEY, e.target.value); } catch (err) {}
+  load('use-cache');
+});
 document.getElementById('hide-current').addEventListener('change', (e) => {
   try { localStorage.setItem(HIDE_PREF_KEY, e.target.checked ? '1' : '0'); } catch (err) {}
   load('use-cache');
 });
-document.getElementById('dl-daily').addEventListener('click', () => {
-  exportChartPng(latestDaily,
-    { labelKey: 'date', countMode: latestMode === 'count', gap: 3 },
-    'buy-yt-daily.png');
+const tokenSlug = () => document.getElementById('token-select').value.toLowerCase();
+document.getElementById('dl-total').addEventListener('click', () => {
+  exportChartPng(latestCharts.total,
+    { labelKey: 'date', countMode: latestCharts.mode === 'count', gap: 3 },
+    `${tokenSlug()}-total-daily.png`);
 });
-document.getElementById('dl-weekly').addEventListener('click', () => {
-  exportChartPng(latestWeekly,
-    { labelKey: 'label', countMode: latestMode === 'count', gap: 8, labelStep: 1 },
-    'buy-yt-weekly.png');
+document.getElementById('dl-buy').addEventListener('click', () => {
+  exportChartPng(latestCharts.buy,
+    { labelKey: 'date', countMode: latestCharts.mode === 'count', gap: 3 },
+    `${tokenSlug()}-${ACTIONS[document.getElementById('token-select').value].buyLabel.toLowerCase()}-daily.png`);
+});
+document.getElementById('dl-sell').addEventListener('click', () => {
+  exportChartPng(latestCharts.sell,
+    { labelKey: 'date', countMode: latestCharts.mode === 'count', gap: 3 },
+    `${tokenSlug()}-${ACTIONS[document.getElementById('token-select').value].sellLabel.toLowerCase()}-daily.png`);
 });
 load('use-cache');
 </script>
