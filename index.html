@@ -32,7 +32,31 @@
     font-size: 16px;
     font-weight: 600;
     letter-spacing: -0.01em;
-    margin: 40px 0 4px;
+    margin: 0;
+  }
+  .chart-section { margin-top: 40px; }
+  .chart-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 4px;
+  }
+  .download-btn {
+    background: transparent;
+    color: rgba(255,255,255,0.7);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .download-btn:hover {
+    color: #01f799;
+    border-color: rgba(1,247,153,0.4);
+    background: rgba(1,247,153,0.06);
   }
   .subtitle {
     font-size: 14px;
@@ -115,40 +139,40 @@
     background: #050505;
     border: 1px solid rgba(255,255,255,0.06);
     border-radius: 8px;
-    padding: 24px 16px 12px 64px;
+    padding: 28px 24px 16px 92px;
   }
   .chart {
     position: relative;
     height: 420px;
     display: flex;
     align-items: flex-end;
-    gap: 2px;
+    gap: 3px;
   }
   .chart.weekly { gap: 8px; }
   .grid {
     position: absolute;
-    left: 0; right: 0; top: 0; bottom: 28px;
+    left: 0; right: 0; top: 0; bottom: 36px;
     pointer-events: none;
   }
   .grid-line {
     position: absolute;
     left: 0; right: 0;
     height: 1px;
-    background: rgba(255,255,255,0.05);
+    background: rgba(255,255,255,0.06);
   }
   .grid-label {
     position: absolute;
-    left: -56px;
+    left: -80px;
     transform: translateY(-50%);
-    font-size: 10px;
-    color: rgba(255,255,255,0.4);
+    font-size: 11px;
+    color: rgba(255,255,255,0.55);
     font-variant-numeric: tabular-nums;
-    width: 50px;
+    width: 64px;
     text-align: right;
   }
   .bar-col {
     flex: 1;
-    height: calc(100% - 28px);
+    height: calc(100% - 36px);
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
@@ -173,11 +197,11 @@
 
   .x-label {
     position: absolute;
-    bottom: 0;
+    bottom: 8px;
     left: 50%;
     transform: translateX(-50%);
-    font-size: 9px;
-    color: rgba(255,255,255,0.45);
+    font-size: 10px;
+    color: rgba(255,255,255,0.55);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
@@ -310,22 +334,32 @@
   <div id="diag" class="diag hidden"></div>
 
   <div id="content" class="hidden">
-    <h2>Daily Volume</h2>
-    <div class="section-sub">Sum of all Buy YT transaction values per day</div>
-    <div class="chart-wrap">
-      <div class="chart" id="chart">
-        <div class="grid" id="grid"></div>
+    <div class="chart-section">
+      <div class="chart-header">
+        <h2>Daily Volume</h2>
+        <button class="download-btn" id="dl-daily" title="Download chart as transparent PNG">Download PNG</button>
       </div>
-      <div class="tooltip" id="tooltip"></div>
+      <div class="section-sub">Sum of all Buy YT transaction values per day</div>
+      <div class="chart-wrap">
+        <div class="chart" id="chart">
+          <div class="grid" id="grid"></div>
+        </div>
+        <div class="tooltip" id="tooltip"></div>
+      </div>
     </div>
 
-    <h2>Weekly Volume</h2>
-    <div class="section-sub">Sum of all Buy YT transaction values per 7-day window</div>
-    <div class="chart-wrap">
-      <div class="chart weekly" id="wchart">
-        <div class="grid" id="wgrid"></div>
+    <div class="chart-section">
+      <div class="chart-header">
+        <h2>Weekly Volume</h2>
+        <button class="download-btn" id="dl-weekly" title="Download chart as transparent PNG">Download PNG</button>
       </div>
-      <div class="tooltip" id="wtooltip"></div>
+      <div class="section-sub">Sum of all Buy YT transaction values per 7-day window</div>
+      <div class="chart-wrap">
+        <div class="chart weekly" id="wchart">
+          <div class="grid" id="wgrid"></div>
+        </div>
+        <div class="tooltip" id="wtooltip"></div>
+      </div>
     </div>
 
     <footer>Hover bars for detail · Aggregated live from on-chain Buy YT events via Goldsky</footer>
@@ -769,7 +803,10 @@ function renderStats(dailyUsd, totalBuyCount, fallbackCountMode) {
   document.getElementById('stat-avg').textContent = fallbackCountMode && total === 0 ? 'n/a' : fmtUsdFull(avg);
 }
 
+let latestDaily = [], latestWeekly = [], latestMode = 'usd';
+
 function render(daily, weekly, mode) {
+  latestDaily = daily; latestWeekly = weekly; latestMode = mode;
   const dailyMax = Math.max(...daily.map(d => d.amount), 0);
   const weeklyMax = Math.max(...weekly.map(d => d.amount), 0);
   const isCount = mode === 'count';
@@ -791,6 +828,74 @@ function render(daily, weekly, mode) {
     labelKey: 'label', dateKey: 'label',
     countMode: isCount,
   });
+}
+
+function drawBarChartToCanvas(ctx, W, H, data, opts) {
+  const LEFT = 88, RIGHT = 24, TOP = 20, BOTTOM = 36;
+  const plotW = W - LEFT - RIGHT;
+  const plotH = H - TOP - BOTTOM;
+  const max = Math.max(...data.map(d => d.amount), 1);
+  const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+
+  ctx.font = `11px ${font}`;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  [0, 0.25, 0.5, 0.75, 1.0].forEach(t => {
+    const y = TOP + plotH - t * plotH;
+    ctx.strokeStyle = 'rgba(140,140,140,0.25)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(LEFT, Math.round(y) + 0.5);
+    ctx.lineTo(LEFT + plotW, Math.round(y) + 0.5);
+    ctx.stroke();
+    const v = t * max;
+    const txt = opts.countMode ? Math.round(v).toString() : fmtUsd(v);
+    ctx.fillStyle = '#9aa0a6';
+    ctx.fillText(txt, LEFT - 12, y);
+  });
+
+  const gap = opts.gap != null ? opts.gap : 3;
+  const barW = Math.max(1, (plotW - gap * (data.length - 1)) / data.length);
+  ctx.fillStyle = '#01f799';
+  data.forEach((d, i) => {
+    if (!(d.amount > 0)) return;
+    const x = LEFT + i * (barW + gap);
+    const h = (d.amount / max) * plotH;
+    const y = TOP + plotH - h;
+    ctx.fillRect(x, y, barW, h);
+  });
+
+  ctx.font = `10px ${font}`;
+  ctx.fillStyle = '#9aa0a6';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const labelStep = opts.labelStep || (data.length > 20 ? Math.ceil(data.length / 12) : 1);
+  data.forEach((d, i) => {
+    if (i % labelStep !== 0 && i !== data.length - 1) return;
+    const x = LEFT + i * (barW + gap) + barW / 2;
+    ctx.fillText(d[opts.labelKey], x, TOP + plotH + 10);
+  });
+}
+
+function exportChartPng(data, opts, filename) {
+  if (!data || data.length === 0) { alert('No data to export.'); return; }
+  const W = 1400, H = 500, dpr = 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  drawBarChartToCanvas(ctx, W, H, data, opts);
+  canvas.toBlob((blob) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, 'image/png');
 }
 
 function setStatus(kind, msg) {
@@ -941,6 +1046,16 @@ document.getElementById('days-select').addEventListener('change', () => load('us
 document.getElementById('hide-current').addEventListener('change', (e) => {
   try { localStorage.setItem(HIDE_PREF_KEY, e.target.checked ? '1' : '0'); } catch (err) {}
   load('use-cache');
+});
+document.getElementById('dl-daily').addEventListener('click', () => {
+  exportChartPng(latestDaily,
+    { labelKey: 'date', countMode: latestMode === 'count', gap: 3 },
+    'buy-yt-daily.png');
+});
+document.getElementById('dl-weekly').addEventListener('click', () => {
+  exportChartPng(latestWeekly,
+    { labelKey: 'label', countMode: latestMode === 'count', gap: 8, labelStep: 1 },
+    'buy-yt-weekly.png');
 });
 load('use-cache');
 </script>
