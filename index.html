@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YT Token Purchases — Daily & Weekly</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #000;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 32px 24px;
+    min-height: 100vh;
+  }
+  .container { max-width: 1400px; margin: 0 auto; }
+  header { margin-bottom: 32px; }
+  .header-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  h1 {
+    font-size: 24px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin-bottom: 8px;
+  }
+  h2 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 40px 0 4px;
+  }
+  .subtitle {
+    font-size: 14px;
+    color: rgba(255,255,255,0.55);
+    font-weight: 400;
+  }
+  .section-sub {
+    font-size: 12px;
+    color: rgba(255,255,255,0.45);
+    margin-bottom: 16px;
+  }
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .days-select {
+    background: #0a0a0a;
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .days-select:focus { outline: none; border-color: rgba(1,247,153,0.5); }
+  .refresh-btn {
+    background: transparent;
+    color: #01f799;
+    border: 1px solid rgba(1,247,153,0.35);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .refresh-btn:hover { background: rgba(1,247,153,0.08); }
+  .refresh-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .stats {
+    display: flex;
+    gap: 32px;
+    margin-top: 20px;
+    padding: 16px 0;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    flex-wrap: wrap;
+  }
+  .stat .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(255,255,255,0.5);
+    margin-bottom: 4px;
+  }
+  .stat .value {
+    font-size: 20px;
+    font-weight: 600;
+    color: #01f799;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat .value.neutral { color: #fff; }
+
+  .chart-wrap {
+    position: relative;
+    margin-top: 12px;
+    background: #050505;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    padding: 24px 16px 12px 64px;
+  }
+  .chart {
+    position: relative;
+    height: 420px;
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+  }
+  .chart.weekly { gap: 8px; }
+  .grid {
+    position: absolute;
+    left: 0; right: 0; top: 0; bottom: 28px;
+    pointer-events: none;
+  }
+  .grid-line {
+    position: absolute;
+    left: 0; right: 0;
+    height: 1px;
+    background: rgba(255,255,255,0.05);
+  }
+  .grid-label {
+    position: absolute;
+    left: -56px;
+    transform: translateY(-50%);
+    font-size: 10px;
+    color: rgba(255,255,255,0.4);
+    font-variant-numeric: tabular-nums;
+    width: 50px;
+    text-align: right;
+  }
+  .bar-col {
+    flex: 1;
+    height: calc(100% - 28px);
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: stretch;
+    position: relative;
+    min-width: 0;
+  }
+  .bar {
+    background: #01f799;
+    border-radius: 2px 2px 0 0;
+    transition: opacity 0.15s, filter 0.15s;
+    min-height: 1px;
+    position: relative;
+  }
+  .bar.zero {
+    background: rgba(255,255,255,0.06);
+    height: 2px !important;
+    min-height: 2px;
+  }
+  .bar-col:hover .bar { filter: brightness(1.15); }
+  .bar-col:hover .bar.zero { background: rgba(255,255,255,0.15); }
+
+  .x-label {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 9px;
+    color: rgba(255,255,255,0.45);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .chart.weekly .x-label { font-size: 11px; }
+
+  .tooltip {
+    position: absolute;
+    background: #0a0a0a;
+    border: 1px solid rgba(1,247,153,0.4);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 12px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.1s;
+    z-index: 10;
+    white-space: nowrap;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  }
+  .tooltip.visible { opacity: 1; }
+  .tooltip .tt-date {
+    color: rgba(255,255,255,0.6);
+    font-size: 11px;
+    margin-bottom: 4px;
+  }
+  .tooltip .tt-amt {
+    color: #01f799;
+    font-weight: 600;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+  .tooltip .tt-count {
+    color: rgba(255,255,255,0.5);
+    font-size: 11px;
+    margin-top: 2px;
+  }
+
+  .status {
+    margin-top: 24px;
+    padding: 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    text-align: center;
+  }
+  .status.loading {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.6);
+  }
+  .status.error {
+    background: rgba(255,80,80,0.06);
+    border: 1px solid rgba(255,80,80,0.3);
+    color: #ff8888;
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    white-space: pre-wrap;
+    text-align: left;
+  }
+  .spinner {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(255,255,255,0.15);
+    border-top-color: #01f799;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 8px;
+    vertical-align: -2px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .hidden { display: none !important; }
+
+  footer {
+    margin-top: 24px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.35);
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="header-row">
+      <div>
+        <h1>YT Token Purchases</h1>
+        <div class="subtitle" id="subtitle">Buy-side activity over the last <span id="window-days">38</span> days</div>
+      </div>
+      <div class="controls">
+        <select class="days-select" id="days-select">
+          <option value="14">14 days</option>
+          <option value="30">30 days</option>
+          <option value="38" selected>38 days</option>
+          <option value="60">60 days</option>
+          <option value="90">90 days</option>
+        </select>
+        <button class="refresh-btn" id="refresh">Refresh</button>
+      </div>
+    </div>
+    <div class="stats" id="stats">
+      <div class="stat"><div class="label">Total Volume</div><div class="value" id="stat-total">—</div></div>
+      <div class="stat"><div class="label">Buy Transactions</div><div class="value neutral" id="stat-count">—</div></div>
+      <div class="stat"><div class="label">Peak Day</div><div class="value" id="stat-peak">—</div></div>
+      <div class="stat"><div class="label">Daily Average</div><div class="value neutral" id="stat-avg">—</div></div>
+    </div>
+  </header>
+
+  <div id="status" class="status loading"><span class="spinner"></span>Fetching transactions from Spectra subgraph…</div>
+
+  <div id="content" class="hidden">
+    <h2>Daily Volume</h2>
+    <div class="section-sub">Sum of all Buy YT transaction values per day</div>
+    <div class="chart-wrap">
+      <div class="chart" id="chart">
+        <div class="grid" id="grid"></div>
+      </div>
+      <div class="tooltip" id="tooltip"></div>
+    </div>
+
+    <h2>Weekly Volume</h2>
+    <div class="section-sub">Sum of all Buy YT transaction values per 7-day window</div>
+    <div class="chart-wrap">
+      <div class="chart weekly" id="wchart">
+        <div class="grid" id="wgrid"></div>
+      </div>
+      <div class="tooltip" id="wtooltip"></div>
+    </div>
+
+    <footer>Hover bars for detail · Aggregated live from on-chain Buy YT events via Goldsky</footer>
+  </div>
+</div>
+
+<script>
+const API_URL = 'https://api.goldsky.com/api/public/project_cm55feuq3euos01xjb3w504ls/subgraphs/spectra-flare/prod/gn';
+const PAGE_SIZE = 1000;
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+const QUERY = `
+  query BuyYTs($since: BigInt!, $cursor: BigInt!, $first: Int!) {
+    transactions(
+      first: $first
+      where: { type: AMM_EXCHANGE, createdAtTimestamp_gte: $since, createdAtTimestamp_gt: $cursor }
+      orderBy: createdAtTimestamp
+      orderDirection: asc
+    ) {
+      id
+      createdAtTimestamp
+      amountsIn {
+        amount
+        asset { symbol decimals type price { value } }
+      }
+      amountsOut {
+        amount
+        asset { symbol decimals type price { value } }
+      }
+    }
+  }
+`;
+
+function fmtUsd(n) {
+  if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return '$' + (n/1e3).toFixed(0) + 'K';
+  return '$' + n.toFixed(0);
+}
+function fmtUsdFull(n) {
+  return '$' + Math.round(n).toLocaleString('en-US');
+}
+function fmtMonthDay(d) {
+  return MONTHS[d.getUTCMonth()] + ' ' + String(d.getUTCDate()).padStart(2, '0');
+}
+function isoDay(d) {
+  return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0') + '-' + String(d.getUTCDate()).padStart(2,'0');
+}
+
+async function gql(variables) {
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: QUERY, variables })
+  });
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
+  const json = await res.json();
+  if (json.errors) throw new Error('GraphQL: ' + json.errors.map(e => e.message).join('; '));
+  return json.data.transactions;
+}
+
+async function fetchAllAmmExchanges(sinceTs) {
+  let all = [];
+  let cursor = '0';
+  while (true) {
+    const batch = await gql({ since: String(sinceTs), cursor, first: PAGE_SIZE });
+    if (batch.length === 0) break;
+    all = all.concat(batch);
+    if (batch.length < PAGE_SIZE) break;
+    cursor = batch[batch.length - 1].createdAtTimestamp;
+  }
+  return all;
+}
+
+function isBuyYt(tx) {
+  return tx.amountsOut.some(a => a.asset.type === 'YT');
+}
+
+function txUsdValue(tx) {
+  const pick = (preferType) => {
+    for (const a of tx.amountsIn) {
+      if (a.asset.type === preferType && a.asset.price && a.asset.price.value) {
+        const amt = Number(a.amount) / Math.pow(10, a.asset.decimals);
+        return amt * parseFloat(a.asset.price.value);
+      }
+    }
+    return null;
+  };
+  let v = pick('UNDERLYING');
+  if (v == null) v = pick('IBT');
+  if (v == null) v = pick('PT');
+  return v ?? 0;
+}
+
+function aggregateDaily(txs, days) {
+  const buckets = new Map();
+  const today = new Date();
+  const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(todayUTC);
+    d.setUTCDate(d.getUTCDate() - i);
+    const iso = isoDay(d);
+    buckets.set(iso, { date: fmtMonthDay(d), iso, amount: 0, count: 0 });
+  }
+  for (const tx of txs) {
+    const d = new Date(Number(tx.createdAtTimestamp) * 1000);
+    const iso = isoDay(d);
+    const b = buckets.get(iso);
+    if (b) {
+      b.amount += tx.usd;
+      b.count += 1;
+    }
+  }
+  return Array.from(buckets.values());
+}
+
+function aggregateWeekly(daily) {
+  const weeks = [];
+  for (let end = daily.length - 1; end >= 0; end -= 7) {
+    const start = Math.max(0, end - 6);
+    const slice = daily.slice(start, end + 1);
+    const startD = slice[0];
+    const endD = slice[slice.length - 1];
+    weeks.unshift({
+      label: startD.date + '–' + endD.date,
+      start: startD.iso,
+      end: endD.iso,
+      amount: slice.reduce((s, d) => s + d.amount, 0),
+      count: slice.reduce((s, d) => s + d.count, 0),
+    });
+  }
+  return weeks;
+}
+
+function buildBarChart(opts) {
+  const { data, maxAmt, chartEl, gridEl, tooltipEl, labelStep, labelKey, dateKey } = opts;
+  chartEl.innerHTML = '';
+  chartEl.appendChild(gridEl);
+  gridEl.innerHTML = '';
+  tooltipEl.classList.remove('visible');
+
+  const max = maxAmt > 0 ? maxAmt : 1;
+  [0, 0.25, 0.5, 0.75, 1.0].forEach(t => {
+    const line = document.createElement('div');
+    line.className = 'grid-line';
+    line.style.bottom = (t * 100) + '%';
+    const lbl = document.createElement('div');
+    lbl.className = 'grid-label';
+    lbl.style.bottom = (t * 100) + '%';
+    lbl.textContent = fmtUsd(t * max);
+    line.appendChild(lbl);
+    gridEl.appendChild(line);
+  });
+
+  data.forEach((d, idx) => {
+    const col = document.createElement('div');
+    col.className = 'bar-col';
+    const bar = document.createElement('div');
+    bar.className = 'bar' + (d.amount === 0 ? ' zero' : '');
+    if (d.amount > 0) bar.style.height = ((d.amount / max) * 100) + '%';
+    col.appendChild(bar);
+    if (idx % labelStep === 0 || idx === data.length - 1) {
+      const x = document.createElement('div');
+      x.className = 'x-label';
+      x.textContent = d[labelKey];
+      col.appendChild(x);
+    }
+    col.addEventListener('mouseenter', () => {
+      tooltipEl.innerHTML =
+        '<div class="tt-date">' + d[dateKey] + '</div>' +
+        '<div class="tt-amt">' + (d.amount === 0 ? 'No purchases' : '$' + d.amount.toLocaleString('en-US', {maximumFractionDigits: 2})) + '</div>' +
+        (d.count > 0 ? '<div class="tt-count">' + d.count + ' transaction' + (d.count === 1 ? '' : 's') + '</div>' : '');
+      tooltipEl.classList.add('visible');
+    });
+    col.addEventListener('mousemove', (e) => {
+      const wrap = chartEl.parentElement.getBoundingClientRect();
+      let x = e.clientX - wrap.left + 12;
+      let y = e.clientY - wrap.top + 12;
+      const ttRect = tooltipEl.getBoundingClientRect();
+      if (x + ttRect.width > wrap.width - 8) x = e.clientX - wrap.left - ttRect.width - 12;
+      tooltipEl.style.left = x + 'px';
+      tooltipEl.style.top = y + 'px';
+    });
+    col.addEventListener('mouseleave', () => tooltipEl.classList.remove('visible'));
+    chartEl.appendChild(col);
+  });
+}
+
+function renderStats(daily) {
+  const total = daily.reduce((s,d) => s + d.amount, 0);
+  const count = daily.reduce((s,d) => s + d.count, 0);
+  const peak = daily.reduce((m,d) => Math.max(m, d.amount), 0);
+  const avg = total / daily.length;
+  document.getElementById('stat-total').textContent = fmtUsdFull(total);
+  document.getElementById('stat-count').textContent = count.toLocaleString('en-US');
+  document.getElementById('stat-peak').textContent = fmtUsdFull(peak);
+  document.getElementById('stat-avg').textContent = fmtUsdFull(avg);
+}
+
+function render(daily, weekly) {
+  const dailyMax = Math.max(...daily.map(d => d.amount), 0);
+  const weeklyMax = Math.max(...weekly.map(d => d.amount), 0);
+  buildBarChart({
+    data: daily, maxAmt: dailyMax,
+    chartEl: document.getElementById('chart'),
+    gridEl: document.getElementById('grid'),
+    tooltipEl: document.getElementById('tooltip'),
+    labelStep: daily.length > 20 ? Math.ceil(daily.length / 12) : 1,
+    labelKey: 'date', dateKey: 'iso',
+  });
+  buildBarChart({
+    data: weekly, maxAmt: weeklyMax,
+    chartEl: document.getElementById('wchart'),
+    gridEl: document.getElementById('wgrid'),
+    tooltipEl: document.getElementById('wtooltip'),
+    labelStep: 1,
+    labelKey: 'label', dateKey: 'label',
+  });
+}
+
+function setStatus(kind, msg) {
+  const el = document.getElementById('status');
+  if (!kind) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  el.className = 'status ' + kind;
+  el.innerHTML = kind === 'loading' ? '<span class="spinner"></span>' + msg : msg;
+}
+
+async function load() {
+  const days = parseInt(document.getElementById('days-select').value, 10);
+  document.getElementById('window-days').textContent = days;
+  document.getElementById('refresh').disabled = true;
+  document.getElementById('content').classList.add('hidden');
+  setStatus('loading', 'Fetching transactions from Spectra subgraph…');
+  try {
+    const sinceTs = Math.floor(Date.now() / 1000) - days * 86400;
+    const all = await fetchAllAmmExchanges(sinceTs);
+    const buys = all.filter(isBuyYt).map(tx => Object.assign(tx, { usd: txUsdValue(tx) }));
+    const daily = aggregateDaily(buys, days);
+    const weekly = aggregateWeekly(daily);
+    renderStats(daily);
+    render(daily, weekly);
+    setStatus(null);
+    document.getElementById('content').classList.remove('hidden');
+  } catch (err) {
+    console.error(err);
+    setStatus('error', 'Failed to load data:\n' + (err && err.message ? err.message : String(err)));
+  } finally {
+    document.getElementById('refresh').disabled = false;
+  }
+}
+
+document.getElementById('refresh').addEventListener('click', load);
+document.getElementById('days-select').addEventListener('change', load);
+load();
+</script>
+</body>
+</html>
