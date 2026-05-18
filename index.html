@@ -34,7 +34,12 @@
     letter-spacing: -0.01em;
     margin: 0;
   }
-  .chart-section { margin-top: 40px; }
+  .chart-section {
+    margin-top: 40px;
+    max-width: 1100px;
+    margin-left: auto;
+    margin-right: auto;
+  }
   .chart-header {
     display: flex;
     align-items: baseline;
@@ -151,7 +156,7 @@
   }
   .chart {
     position: relative;
-    height: 380px;
+    aspect-ratio: 4 / 3;
     display: flex;
     align-items: flex-end;
     gap: 3px;
@@ -864,7 +869,7 @@ function render(total, buy, sell, mode) {
 }
 
 function drawBarChartToCanvas(ctx, W, H, data, opts) {
-  const LEFT = 92, RIGHT = 28, TOP = 20, BOTTOM = 40;
+  const LEFT = 108, RIGHT = 32, TOP = 32, BOTTOM = 68;
   const plotW = W - LEFT - RIGHT;
   const plotH = H - TOP - BOTTOM;
   const max = Math.max(...data.map(d => d.amount), 1);
@@ -904,8 +909,8 @@ function drawBarChartToCanvas(ctx, W, H, data, opts) {
   ctx.lineTo(LEFT + plotW, TOP + plotH + 0.5);
   ctx.stroke();
 
-  // Y-axis labels (right-aligned, 12px from the axis line).
-  ctx.font = `11px ${font}`;
+  // Y-axis labels (right-aligned, 14px from the axis line).
+  ctx.font = `14px ${font}`;
   ctx.fillStyle = AXIS;
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
@@ -913,11 +918,11 @@ function drawBarChartToCanvas(ctx, W, H, data, opts) {
     const y = TOP + plotH - t * plotH;
     const v = t * max;
     const txt = opts.countMode ? Math.round(v).toString() : fmtUsd(v);
-    ctx.fillText(txt, LEFT - 12, y);
+    ctx.fillText(txt, LEFT - 14, y);
   });
 
   // X-axis labels below the baseline.
-  ctx.font = `10px ${font}`;
+  ctx.font = `12px ${font}`;
   ctx.fillStyle = AXIS;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
@@ -925,13 +930,13 @@ function drawBarChartToCanvas(ctx, W, H, data, opts) {
   data.forEach((d, i) => {
     if (i % labelStep !== 0 && i !== data.length - 1) return;
     const x = LEFT + i * (barW + gap) + barW / 2;
-    ctx.fillText(d[opts.labelKey], x, TOP + plotH + 12);
+    ctx.fillText(d[opts.labelKey], x, TOP + plotH + 16);
   });
 }
 
 function exportChartPng(data, opts, filename) {
   if (!data || data.length === 0) { alert('No data to export.'); return; }
-  const W = 1400, H = 500, dpr = 2;
+  const W = 1200, H = 900, dpr = 2;
   const canvas = document.createElement('canvas');
   canvas.width = W * dpr;
   canvas.height = H * dpr;
