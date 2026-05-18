@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>YT Token Purchases — Daily & Weekly</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #000;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 32px 24px;
+    min-height: 100vh;
+  }
+  .container { max-width: 1400px; margin: 0 auto; }
+  header { margin-bottom: 32px; }
+  h1 {
+    font-size: 24px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin-bottom: 8px;
+  }
+  h2 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 40px 0 4px;
+  }
+  .subtitle {
+    font-size: 14px;
+    color: rgba(255,255,255,0.55);
+    font-weight: 400;
+  }
+  .section-sub {
+    font-size: 12px;
+    color: rgba(255,255,255,0.45);
+    margin-bottom: 16px;
+  }
+  .stats {
+    display: flex;
+    gap: 32px;
+    margin-top: 20px;
+    padding: 16px 0;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    flex-wrap: wrap;
+  }
+  .stat .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(255,255,255,0.5);
+    margin-bottom: 4px;
+  }
+  .stat .value {
+    font-size: 20px;
+    font-weight: 600;
+    color: #01f799;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat .value.neutral { color: #fff; }
+
+  .chart-wrap {
+    position: relative;
+    margin-top: 12px;
+    background: #050505;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    padding: 24px 16px 12px 64px;
+  }
+  .chart {
+    position: relative;
+    height: 420px;
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+  }
+  .chart.weekly {
+    gap: 8px;
+  }
+  .grid {
+    position: absolute;
+    left: 0; right: 0; top: 0; bottom: 28px;
+    pointer-events: none;
+  }
+  .grid-line {
+    position: absolute;
+    left: 0; right: 0;
+    height: 1px;
+    background: rgba(255,255,255,0.05);
+  }
+  .grid-label {
+    position: absolute;
+    left: -56px;
+    transform: translateY(-50%);
+    font-size: 10px;
+    color: rgba(255,255,255,0.4);
+    font-variant-numeric: tabular-nums;
+    width: 50px;
+    text-align: right;
+  }
+  .bar-col {
+    flex: 1;
+    height: calc(100% - 28px);
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: stretch;
+    position: relative;
+    min-width: 0;
+  }
+  .bar {
+    background: #01f799;
+    border-radius: 2px 2px 0 0;
+    transition: opacity 0.15s, filter 0.15s;
+    min-height: 1px;
+    position: relative;
+  }
+  .bar.zero {
+    background: rgba(255,255,255,0.06);
+    height: 2px !important;
+    min-height: 2px;
+  }
+  .bar-col:hover .bar { filter: brightness(1.15); }
+  .bar-col:hover .bar.zero { background: rgba(255,255,255,0.15); }
+
+  .x-label {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 9px;
+    color: rgba(255,255,255,0.45);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .chart.weekly .x-label {
+    font-size: 11px;
+  }
+
+  .tooltip {
+    position: absolute;
+    background: #0a0a0a;
+    border: 1px solid rgba(1,247,153,0.4);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 12px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.1s;
+    z-index: 10;
+    white-space: nowrap;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  }
+  .tooltip.visible { opacity: 1; }
+  .tooltip .tt-date {
+    color: rgba(255,255,255,0.6);
+    font-size: 11px;
+    margin-bottom: 4px;
+  }
+  .tooltip .tt-amt {
+    color: #01f799;
+    font-weight: 600;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+  .tooltip .tt-count {
+    color: rgba(255,255,255,0.5);
+    font-size: 11px;
+    margin-top: 2px;
+  }
+
+  footer {
+    margin-top: 24px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.35);
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>YT Token Purchases</h1>
+    <div class="subtitle">Buy-side activity over the last 38 days</div>
+    <div class="stats">
+      <div class="stat">
+        <div class="label">Total Volume</div>
+        <div class="value">$8,449,161</div>
+      </div>
+      <div class="stat">
+        <div class="label">Buy Transactions</div>
+        <div class="value neutral">211</div>
+      </div>
+      <div class="stat">
+        <div class="label">Peak Day</div>
+        <div class="value">$1,224,720</div>
+      </div>
+      <div class="stat">
+        <div class="label">Daily Average</div>
+        <div class="value neutral">$222,346</div>
+      </div>
+    </div>
+  </header>
+
+  <h2>Daily Volume</h2>
+  <div class="section-sub">Sum of all Buy YT transaction values per day</div>
+  <div class="chart-wrap">
+    <div class="chart" id="chart">
+      <div class="grid" id="grid"></div>
+    </div>
+    <div class="tooltip" id="tooltip"></div>
+  </div>
+
+  <h2>Weekly Volume</h2>
+  <div class="section-sub">Sum of all Buy YT transaction values per 7-day window</div>
+  <div class="chart-wrap">
+    <div class="chart weekly" id="wchart">
+      <div class="grid" id="wgrid"></div>
+    </div>
+    <div class="tooltip" id="wtooltip"></div>
+  </div>
+
+  <footer>Hover bars for detail · Aggregated from on-chain Buy YT events</footer>
+</div>
+
+<script>
+  function fmt(n) {
+    if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return '$' + (n/1e3).toFixed(0) + 'K';
+    return '$' + n.toFixed(0);
+  }
+
+  function buildBarChart(opts) {
+    const { data, maxAmt, chartEl, gridEl, tooltipEl, labelStep, labelKey, dateKey } = opts;
+
+    [0, 0.25, 0.5, 0.75, 1.0].forEach(t => {
+      const line = document.createElement('div');
+      line.className = 'grid-line';
+      line.style.bottom = (t * 100) + '%';
+      const lbl = document.createElement('div');
+      lbl.className = 'grid-label';
+      lbl.style.bottom = (t * 100) + '%';
+      lbl.textContent = fmt(t * maxAmt);
+      line.appendChild(lbl);
+      gridEl.appendChild(line);
+    });
+
+    data.forEach((d, idx) => {
+      const col = document.createElement('div');
+      col.className = 'bar-col';
+      const bar = document.createElement('div');
+      bar.className = 'bar' + (d.amount === 0 ? ' zero' : '');
+      if (d.amount > 0) bar.style.height = ((d.amount / maxAmt) * 100) + '%';
+      col.appendChild(bar);
+      if (idx % labelStep === 0 || idx === data.length - 1) {
+        const x = document.createElement('div');
+        x.className = 'x-label';
+        x.textContent = d[labelKey];
+        col.appendChild(x);
+      }
+      col.addEventListener('mouseenter', () => {
+        tooltipEl.innerHTML =
+          '<div class="tt-date">' + d[dateKey] + '</div>' +
+          '<div class="tt-amt">' + (d.amount === 0 ? 'No purchases' : '$' + d.amount.toLocaleString('en-US', {maximumFractionDigits: 2})) + '</div>' +
+          (d.count > 0 ? '<div class="tt-count">' + d.count + ' transaction' + (d.count === 1 ? '' : 's') + '</div>' : '');
+        tooltipEl.classList.add('visible');
+      });
+      col.addEventListener('mousemove', (e) => {
+        const wrap = chartEl.parentElement.getBoundingClientRect();
+        let x = e.clientX - wrap.left + 12;
+        let y = e.clientY - wrap.top + 12;
+        const ttRect = tooltipEl.getBoundingClientRect();
+        if (x + ttRect.width > wrap.width - 8) x = e.clientX - wrap.left - ttRect.width - 12;
+        tooltipEl.style.left = x + 'px';
+        tooltipEl.style.top = y + 'px';
+      });
+      col.addEventListener('mouseleave', () => tooltipEl.classList.remove('visible'));
+      chartEl.appendChild(col);
+    });
+  }
+
+  // Daily
+  const daily = [{"date": "Apr 11", "iso": "2026-04-11", "amount": 247487.0, "count": 1}, {"date": "Apr 12", "iso": "2026-04-12", "amount": 266303.38, "count": 13}, {"date": "Apr 13", "iso": "2026-04-13", "amount": 42516.0, "count": 5}, {"date": "Apr 14", "iso": "2026-04-14", "amount": 33265.0, "count": 5}, {"date": "Apr 15", "iso": "2026-04-15", "amount": 42729.0, "count": 6}, {"date": "Apr 16", "iso": "2026-04-16", "amount": 27974.0, "count": 1}, {"date": "Apr 17", "iso": "2026-04-17", "amount": 94752.0, "count": 12}, {"date": "Apr 18", "iso": "2026-04-18", "amount": 1235.55, "count": 2}, {"date": "Apr 19", "iso": "2026-04-19", "amount": 88816.0, "count": 6}, {"date": "Apr 20", "iso": "2026-04-20", "amount": 1438.0, "count": 1}, {"date": "Apr 21", "iso": "2026-04-21", "amount": 0.0, "count": 0}, {"date": "Apr 22", "iso": "2026-04-22", "amount": 49132.0, "count": 4}, {"date": "Apr 23", "iso": "2026-04-23", "amount": 34638.0, "count": 1}, {"date": "Apr 24", "iso": "2026-04-24", "amount": 509883.0, "count": 4}, {"date": "Apr 25", "iso": "2026-04-25", "amount": 2238.0, "count": 3}, {"date": "Apr 26", "iso": "2026-04-26", "amount": 860649.0, "count": 8}, {"date": "Apr 27", "iso": "2026-04-27", "amount": 1105647.0, "count": 10}, {"date": "Apr 28", "iso": "2026-04-28", "amount": 300478.29, "count": 7}, {"date": "Apr 29", "iso": "2026-04-29", "amount": 38320.0, "count": 3}, {"date": "Apr 30", "iso": "2026-04-30", "amount": 1224720.0, "count": 10}, {"date": "May 01", "iso": "2026-05-01", "amount": 347552.0, "count": 8}, {"date": "May 02", "iso": "2026-05-02", "amount": 428935.0, "count": 4}, {"date": "May 03", "iso": "2026-05-03", "amount": 138746.98, "count": 7}, {"date": "May 04", "iso": "2026-05-04", "amount": 23158.0, "count": 3}, {"date": "May 05", "iso": "2026-05-05", "amount": 205013.0, "count": 6}, {"date": "May 06", "iso": "2026-05-06", "amount": 40358.1, "count": 5}, {"date": "May 07", "iso": "2026-05-07", "amount": 128144.26000000001, "count": 8}, {"date": "May 08", "iso": "2026-05-08", "amount": 190546.0, "count": 5}, {"date": "May 09", "iso": "2026-05-09", "amount": 58883.0, "count": 6}, {"date": "May 10", "iso": "2026-05-10", "amount": 34688.0, "count": 2}, {"date": "May 11", "iso": "2026-05-11", "amount": 111025.0, "count": 8}, {"date": "May 12", "iso": "2026-05-12", "amount": 96527.0, "count": 3}, {"date": "May 13", "iso": "2026-05-13", "amount": 362668.0, "count": 9}, {"date": "May 14", "iso": "2026-05-14", "amount": 8286.0, "count": 2}, {"date": "May 15", "iso": "2026-05-15", "amount": 478836.0, "count": 5}, {"date": "May 16", "iso": "2026-05-16", "amount": 11419.95, "count": 9}, {"date": "May 17", "iso": "2026-05-17", "amount": 390912.78, "count": 10}, {"date": "May 18", "iso": "2026-05-18", "amount": 421240.45, "count": 9}];
+  buildBarChart({
+    data: daily,
+    maxAmt: 1224720.0,
+    chartEl: document.getElementById('chart'),
+    gridEl: document.getElementById('grid'),
+    tooltipEl: document.getElementById('tooltip'),
+    labelStep: daily.length > 20 ? Math.ceil(daily.length / 12) : 1,
+    labelKey: 'date',
+    dateKey: 'iso',
+  });
+
+  // Weekly
+  const weekly = [{"label": "Apr 07\u2013Apr 13", "start": "2026-04-07", "end": "2026-04-13", "amount": 556306.38, "count": 19}, {"label": "Apr 14\u2013Apr 20", "start": "2026-04-14", "end": "2026-04-20", "amount": 290209.55, "count": 33}, {"label": "Apr 21\u2013Apr 27", "start": "2026-04-21", "end": "2026-04-27", "amount": 2562187.0, "count": 30}, {"label": "Apr 28\u2013May 04", "start": "2026-04-28", "end": "2026-05-04", "amount": 2501910.27, "count": 42}, {"label": "May 05\u2013May 11", "start": "2026-05-05", "end": "2026-05-11", "amount": 768657.36, "count": 40}, {"label": "May 12\u2013May 18", "start": "2026-05-12", "end": "2026-05-18", "amount": 1769890.18, "count": 47}];
+  buildBarChart({
+    data: weekly,
+    maxAmt: 2562187.0,
+    chartEl: document.getElementById('wchart'),
+    gridEl: document.getElementById('wgrid'),
+    tooltipEl: document.getElementById('wtooltip'),
+    labelStep: 1,
+    labelKey: 'label',
+    dateKey: 'label',
+  });
+</script>
+</body>
+</html>
