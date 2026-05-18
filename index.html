@@ -92,6 +92,49 @@
     font-size: 13px;
   }
   .token-select:hover { background: rgba(1,247,153,0.06); }
+  .addr-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 240px;
+  }
+  .addr-row {
+    display: flex;
+    gap: 6px;
+  }
+  .addr-input {
+    flex: 1;
+    background: #0a0a0a;
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    min-width: 0;
+  }
+  .addr-input:focus { outline: none; border-color: rgba(1,247,153,0.5); }
+  .addr-input::placeholder { color: rgba(255,255,255,0.3); }
+  .addr-clear {
+    background: transparent;
+    color: rgba(255,255,255,0.5);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .addr-clear:hover { color: #fff; border-color: rgba(255,255,255,0.3); }
+  .addr-detect {
+    font-size: 11px;
+    color: rgba(255,255,255,0.5);
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    padding: 0 2px;
+    min-height: 14px;
+  }
+  .addr-detect.ok { color: #01f799; }
+  .addr-detect.bad { color: #ff8888; }
   .refresh-btn {
     background: transparent;
     color: #01f799;
@@ -324,6 +367,14 @@
           <option value="PT">PT (Principal Token)</option>
           <option value="LP">LP (Liquidity)</option>
         </select>
+        <div class="addr-wrap">
+          <div class="addr-row">
+            <input class="addr-input" id="addr-input" type="text" spellcheck="false" autocomplete="off"
+              placeholder="Filter by token address (0x…)" title="Paste a PT/YT/LP token address to narrow to that single token">
+            <button class="addr-clear" id="addr-clear" title="Clear address filter">×</button>
+          </div>
+          <div class="addr-detect" id="addr-detect">&nbsp;</div>
+        </div>
         <select class="days-select" id="days-select">
           <option value="14">14 days</option>
           <option value="30">30 days</option>
@@ -405,8 +456,9 @@
 const API_URL = 'https://api.goldsky.com/api/public/project_cm55feuq3euos01xjb3w504ls/subgraphs/spectra-flare/prod/gn';
 const PAGE_SIZE = 1000;
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const CACHE_KEY = 'spectra:yt:cache:v3';
+const CACHE_KEY = 'spectra:yt:cache:v4';
 const TOKEN_PREF_KEY = 'spectra:yt:token';
+const ADDR_PREF_KEY = 'spectra:yt:addr';
 
 const ACTIONS = {
   YT: { buy: 'BUY_YT',         sell: 'SELL_YT',           buyLabel: 'Buy',    sellLabel: 'Sell',   title: 'YT Token Activity' },
@@ -521,6 +573,7 @@ function compressTx(tx) {
     a.asset?.underlying?.decimals ?? null,
     a.asset?.underlying?.price?.value || null,
     a.asset?.underlying?.symbol || '',
+    a.asset?.id || '',
   ];
   return {
     i: tx.id,
@@ -535,9 +588,10 @@ function compressTx(tx) {
 }
 
 function decompressTx(c) {
-  const xa = ([amount, type, decimals, priceValue, symbol, uDecimals, uPriceValue, uSymbol]) => ({
+  const xa = ([amount, type, decimals, priceValue, symbol, uDecimals, uPriceValue, uSymbol, assetId]) => ({
     amount,
     asset: {
+      id: assetId || '',
       type, decimals, symbol,
       price: priceValue ? { value: priceValue } : null,
       underlying: uDecimals != null ? {
@@ -639,6 +693,48 @@ async function ensureCache(mode) {
 }
 
 function isPtType(t) { return String(t || '').toUpperCase() === 'PT'; }
+
+function normalizeAddr(s) {
+  const v = String(s || '').trim().toLowerCase();
+  return v.startsWith('0x') ? v : (v ? '0x' + v.replace(/^0+/, '') : '');
+}
+
+function assetIdMatchesAddr(assetId, addr) {
+  if (!addr) return false;
+  const id = String(assetId || '').toLowerCase();
+  if (!id) return false;
+  return id === addr || id.endsWith('-' + addr) || id.endsWith('/' + addr) || id.includes(addr);
+}
+
+function groupTouchesAddr(events, addr) {
+  if (!addr) return true;
+  for (const ev of events) {
+    for (const a of [...(ev.amountsIn||[]), ...(ev.amountsOut||[])]) {
+      if (assetIdMatchesAddr(a.asset?.id, addr)) return true;
+    }
+  }
+  return false;
+}
+
+function buildAssetIndex(txs) {
+  const map = new Map();
+  for (const tx of txs) {
+    for (const a of [...(tx.amountsIn||[]), ...(tx.amountsOut||[])]) {
+      const id = String(a.asset?.id || '').toLowerCase();
+      if (!id || map.has(id)) continue;
+      map.set(id, { id, type: a.asset.type, symbol: a.asset.symbol || '', decimals: a.asset.decimals });
+    }
+  }
+  return map;
+}
+
+function detectAsset(addr, assetIdx) {
+  if (!addr) return null;
+  for (const info of assetIdx.values()) {
+    if (assetIdMatchesAddr(info.id, addr)) return info;
+  }
+  return null;
+}
 
 function txHash(tx) {
   const id = tx.id || '';
@@ -969,12 +1065,26 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-function updateLabelsForToken(token, days, isYtd) {
+function updateAddrDetect(addr, detected) {
+  const el = document.getElementById('addr-detect');
+  if (!addr) { el.className = 'addr-detect'; el.innerHTML = '&nbsp;'; return; }
+  if (detected) {
+    el.className = 'addr-detect ok';
+    el.textContent = `→ ${detected.symbol || '?'} (${detected.type})`;
+  } else {
+    el.className = 'addr-detect bad';
+    el.textContent = '→ not seen in cached transactions';
+  }
+}
+
+function updateLabelsForToken(token, days, isYtd, addr, detected) {
   const A = ACTIONS[token];
-  document.getElementById('title').textContent = A.title;
+  const tokenLabel = (addr && detected && detected.symbol) ? `${detected.symbol} (${detected.type})` : A.title;
+  document.getElementById('title').textContent = tokenLabel;
   const windowTxt = isYtd ? `year to date (since Jan 1 · ${days} days)` : `over the last ${days} days`;
+  const scopeTxt = addr ? ` for one address` : '';
   document.getElementById('subtitle').textContent =
-    `Combined ${A.buyLabel.toLowerCase()} + ${A.sellLabel.toLowerCase()} volume ${windowTxt}`;
+    `Combined ${A.buyLabel.toLowerCase()} + ${A.sellLabel.toLowerCase()} volume ${windowTxt}${scopeTxt}`;
   document.getElementById('stat-buy-label').textContent = `${A.buyLabel} Volume`;
   document.getElementById('stat-sell-label').textContent = `${A.sellLabel} Volume`;
   document.getElementById('h2-total').textContent = `Daily Total Volume`;
@@ -986,12 +1096,12 @@ function updateLabelsForToken(token, days, isYtd) {
 }
 
 async function load(refreshMode) {
-  const token = document.getElementById('token-select').value;
-  const A = ACTIONS[token];
+  const addrInput = document.getElementById('addr-input').value;
+  const addr = normalizeAddr(addrInput);
+
   const sel = document.getElementById('days-select').value;
   const isYtd = sel === 'ytd';
   const days = isYtd ? daysSinceJan1() : parseInt(sel, 10);
-  updateLabelsForToken(token, days, isYtd);
   document.getElementById('refresh').disabled = true;
 
   const hasCache = cache.txs.length > 0 || loadCacheFromStorage();
@@ -1004,6 +1114,29 @@ async function load(refreshMode) {
 
   try {
     const cacheInfo = await ensureCache(refreshMode || 'use-cache');
+
+    let token = document.getElementById('token-select').value;
+    let detected = null;
+    if (addr) {
+      const assetIdx = buildAssetIndex(cache.txs);
+      detected = detectAsset(addr, assetIdx);
+      if (detected) {
+        const t = String(detected.type || '').toUpperCase();
+        const auto = t === 'YT' || t === 'FYT' ? 'YT'
+                   : t === 'PT' ? 'PT'
+                   : t === 'LP' ? 'LP'
+                   : null;
+        if (auto && auto !== token) {
+          token = auto;
+          document.getElementById('token-select').value = token;
+          try { localStorage.setItem(TOKEN_PREF_KEY, token); } catch (e) {}
+        }
+      }
+    }
+    updateAddrDetect(addr, detected);
+    const A = ACTIONS[token];
+    updateLabelsForToken(token, days, isYtd, addr, detected);
+
     const sinceTs = Math.floor(Date.now() / 1000) - days * 86400;
     const all = cache.txs.filter(t => Number(t.createdAtTimestamp) >= sinceTs);
 
@@ -1020,6 +1153,7 @@ async function load(refreshMode) {
     for (const [hash, events] of groups) {
       const c = classByGroup.get(hash);
       if (c !== A.buy && c !== A.sell) continue;
+      if (addr && !groupTouchesAddr(events, addr)) continue;
       const usd = groupUsdValue(events, c);
       const ts = Math.min(...events.map(e => Number(e.createdAtTimestamp)));
       const g = { hash, events, usd, ts, cls: c };
@@ -1105,6 +1239,8 @@ try {
   document.getElementById('hide-current').checked = localStorage.getItem(HIDE_PREF_KEY) === '1';
   const savedToken = localStorage.getItem(TOKEN_PREF_KEY);
   if (savedToken && ACTIONS[savedToken]) document.getElementById('token-select').value = savedToken;
+  const savedAddr = localStorage.getItem(ADDR_PREF_KEY);
+  if (savedAddr) document.getElementById('addr-input').value = savedAddr;
 } catch (e) {}
 
 document.getElementById('refresh').addEventListener('click', () => load('force'));
@@ -1116,6 +1252,19 @@ document.getElementById('clear-cache').addEventListener('click', () => {
 document.getElementById('days-select').addEventListener('change', () => load('use-cache'));
 document.getElementById('token-select').addEventListener('change', (e) => {
   try { localStorage.setItem(TOKEN_PREF_KEY, e.target.value); } catch (err) {}
+  load('use-cache');
+});
+let addrDebounce = null;
+document.getElementById('addr-input').addEventListener('input', (e) => {
+  const v = e.target.value.trim();
+  try { localStorage.setItem(ADDR_PREF_KEY, v); } catch (err) {}
+  clearTimeout(addrDebounce);
+  addrDebounce = setTimeout(() => load('use-cache'), 250);
+});
+document.getElementById('addr-clear').addEventListener('click', () => {
+  const el = document.getElementById('addr-input');
+  el.value = '';
+  try { localStorage.removeItem(ADDR_PREF_KEY); } catch (err) {}
   load('use-cache');
 });
 document.getElementById('hide-current').addEventListener('change', (e) => {
