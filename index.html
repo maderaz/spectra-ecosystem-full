@@ -322,15 +322,16 @@ const PAGE_SIZE = 1000;
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 const QUERY = `
-  query BuyYTs($since: BigInt!, $cursor: BigInt!, $first: Int!) {
+  query AllTx($since: BigInt!, $cursor: BigInt!, $first: Int!) {
     transactions(
       first: $first
-      where: { type: AMM_EXCHANGE, createdAtTimestamp_gte: $since, createdAtTimestamp_gt: $cursor }
+      where: { createdAtTimestamp_gte: $since, createdAtTimestamp_gt: $cursor }
       orderBy: createdAtTimestamp
       orderDirection: asc
     ) {
       id
       createdAtTimestamp
+      type
       valueUnderlying
       amountsIn {
         amount
@@ -347,7 +348,7 @@ const QUERY = `
 const INTROSPECT = `{
   AssetType: __type(name: "AssetType") { enumValues { name } }
   TxType: __type(name: "TransactionType") { enumValues { name } }
-  Tx: __type(name: "Transaction") { fields { name type { name kind ofType { name kind ofType { name kind } } } } }
+  Query: __type(name: "Query") { fields { name } }
 }`;
 
 function fmtUsd(n) {
@@ -383,13 +384,14 @@ async function introspect() {
     return {
       assetTypes: (d.AssetType?.enumValues || []).map(v => v.name),
       txTypes: (d.TxType?.enumValues || []).map(v => v.name),
+      queryFields: (d.Query?.fields || []).map(f => f.name),
     };
   } catch (e) {
-    return { assetTypes: [], txTypes: [], error: e.message };
+    return { assetTypes: [], txTypes: [], queryFields: [], error: e.message };
   }
 }
 
-async function fetchAllAmmExchanges(sinceTs) {
+async function fetchAllTransactions(sinceTs) {
   let all = [];
   let cursor = '0';
   while (true) {
@@ -605,18 +607,19 @@ async function load() {
   try {
     const schema = await introspect();
     const sinceTs = Math.floor(Date.now() / 1000) - days * 86400;
-    const all = await fetchAllAmmExchanges(sinceTs);
+    const all = await fetchAllTransactions(sinceTs);
 
-    const seenOutTypes = new Map();
-    const seenInTypes = new Map();
+    const txByType = new Map();
+    const ytInByTxType = new Map();
+    const ytOutByTxType = new Map();
     for (const tx of all) {
-      for (const a of tx.amountsOut || []) {
-        const t = a.asset?.type ?? '(none)';
-        seenOutTypes.set(t, (seenOutTypes.get(t) || 0) + 1);
+      const t = tx.type || '(none)';
+      txByType.set(t, (txByType.get(t) || 0) + 1);
+      if ((tx.amountsIn || []).some(a => a.asset && isYtType(a.asset.type))) {
+        ytInByTxType.set(t, (ytInByTxType.get(t) || 0) + 1);
       }
-      for (const a of tx.amountsIn || []) {
-        const t = a.asset?.type ?? '(none)';
-        seenInTypes.set(t, (seenInTypes.get(t) || 0) + 1);
+      if ((tx.amountsOut || []).some(a => a.asset && isYtType(a.asset.type))) {
+        ytOutByTxType.set(t, (ytOutByTxType.get(t) || 0) + 1);
       }
     }
 
@@ -638,13 +641,17 @@ async function load() {
     render(daily, weekly, mode);
 
     const fmtMap = (m) => Array.from(m.entries()).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `${escapeHtml(k)}×${v}`).join(' · ') || '(none)';
+    const ytRelated = schema.queryFields.filter(f => /yt|yield|purchas/i.test(f));
     const parts = [];
-    parts.push(`<b>Fetched:</b> ${all.length} AMM_EXCHANGE tx · <b>Buy YT:</b> ${buys.length} · <b>Priced:</b> ${buysWithUsd.length}`);
-    parts.push(`<b>amountsOut.asset.type:</b> ${fmtMap(seenOutTypes)}`);
-    parts.push(`<b>amountsIn.asset.type:</b> ${fmtMap(seenInTypes)}`);
-    if (schema.assetTypes.length) parts.push(`<b>Schema AssetType enum:</b> ${schema.assetTypes.map(escapeHtml).join(', ')}`);
-    if (mode === 'count') parts.push(`<b>⚠ No USD prices available — bars show transaction count per day.</b>`);
-    if (all.length === 0) parts.push(`<b>⚠ No AMM_EXCHANGE transactions in window. Try a wider time range.</b>`);
+    parts.push(`<b>Fetched:</b> ${all.length} tx in last ${days}d · <b>Matched as Buy YT:</b> ${buys.length} · <b>Priced:</b> ${buysWithUsd.length}`);
+    parts.push(`<b>By TransactionType:</b> ${fmtMap(txByType)}`);
+    parts.push(`<b>Tx with YT in amountsOut:</b> ${fmtMap(ytOutByTxType)}`);
+    parts.push(`<b>Tx with YT in amountsIn:</b> ${fmtMap(ytInByTxType)}`);
+    if (schema.txTypes.length) parts.push(`<b>Schema TransactionType enum:</b> ${schema.txTypes.map(escapeHtml).join(', ')}`);
+    if (ytRelated.length) parts.push(`<b>YT-related root query fields:</b> ${ytRelated.map(escapeHtml).join(', ')}`);
+    if (schema.queryFields.length) parts.push(`<b>All root query fields:</b> ${schema.queryFields.map(escapeHtml).join(', ')}`);
+    if (mode === 'count') parts.push(`<b>⚠ No USD prices on matched txs — bars show transaction count per day.</b>`);
+    if (all.length === 0) parts.push(`<b>⚠ No transactions in window. Try a wider time range.</b>`);
     setDiag(parts.join('<br>'));
 
     setStatus(null);
