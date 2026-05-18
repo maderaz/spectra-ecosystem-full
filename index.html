@@ -367,10 +367,10 @@ function fmtUsdFull(n) {
   return '$' + Math.round(n).toLocaleString('en-US');
 }
 function fmtMonthDay(d) {
-  return MONTHS[d.getUTCMonth()] + ' ' + String(d.getUTCDate()).padStart(2, '0');
+  return MONTHS[d.getMonth()] + ' ' + String(d.getDate()).padStart(2, '0');
 }
 function isoDay(d) {
-  return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0') + '-' + String(d.getUTCDate()).padStart(2,'0');
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
 
 async function gql(query, variables) {
@@ -631,10 +631,10 @@ function groupUsdValue(events, classification) {
 function emptyDailyBuckets(days) {
   const buckets = new Map();
   const today = new Date();
-  const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(todayUTC);
-    d.setUTCDate(d.getUTCDate() - i);
+    const d = new Date(todayLocal);
+    d.setDate(d.getDate() - i);
     const iso = isoDay(d);
     buckets.set(iso, { date: fmtMonthDay(d), iso, amount: 0, count: 0 });
   }
@@ -856,13 +856,21 @@ async function load(refreshMode) {
       ? `<b>Cache hit:</b> ${cache.txs.length} tx in memory · last fetched ${ageText} · no API call`
       : `<b>Cache ${cacheInfo.source}:</b> +${cacheInfo.fetched} new tx · ${cache.txs.length} total cached (last ${CACHE_WINDOW_DAYS}d)`;
 
+    const tzLabel = (() => {
+      try {
+        const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(new Date());
+        const t = parts.find(p => p.type === 'timeZoneName');
+        return t ? t.value : 'local';
+      } catch (e) { return 'local'; }
+    })();
     const samples = buyYtGroups.slice(0, 12).map(g => {
       const t = new Date(g.ts * 1000);
-      const hh = String(t.getUTCHours()).padStart(2,'0') + ':' + String(t.getUTCMinutes()).padStart(2,'0');
+      const dd = String(t.getDate()).padStart(2,'0') + '/' + String(t.getMonth()+1).padStart(2,'0');
+      const hh = String(t.getHours()).padStart(2,'0') + ':' + String(t.getMinutes()).padStart(2,'0');
       const typesIn = g.events.map(e => e.type).join('+');
       const hashShort = g.hash.slice(0, 10) + '…' + g.hash.slice(-4);
       const usdTxt = g.usd > 0 ? '$' + g.usd.toLocaleString('en-US',{maximumFractionDigits:2}) : '<i style="color:#ff8888">$0</i>';
-      return `  ${escapeHtml(hh)} UTC · <span style="color:#01f799">${escapeHtml(hashShort)}</span> · ${escapeHtml(typesIn)} · ${usdTxt}`;
+      return `  ${escapeHtml(dd)} ${escapeHtml(hh)} ${escapeHtml(tzLabel)} · <span style="color:#01f799">${escapeHtml(hashShort)}</span> · ${escapeHtml(typesIn)} · ${usdTxt}`;
     }).join('<br>');
 
     const parts = [];
