@@ -73,6 +73,17 @@
   }
   .refresh-btn:hover { background: rgba(1,247,153,0.08); }
   .refresh-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .hide-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.7);
+    cursor: pointer;
+    user-select: none;
+  }
+  .hide-toggle input { accent-color: #01f799; cursor: pointer; }
+  .hide-toggle:hover { color: #fff; }
 
   .stats {
     display: flex;
@@ -281,6 +292,9 @@
         </select>
         <button class="refresh-btn" id="refresh" title="Incrementally fetch new transactions">Refresh</button>
         <button class="refresh-btn" id="clear-cache" title="Drop cached data and re-fetch from scratch">Clear cache</button>
+        <label class="hide-toggle" title="Drop the current (still-running) day/week so partial data doesn't skew the view">
+          <input type="checkbox" id="hide-current"> Hide in-progress
+        </label>
       </div>
     </div>
     <div class="stats" id="stats">
@@ -847,18 +861,23 @@ async function load(refreshMode) {
     buyYtGroups.sort((a, b) => b.ts - a.ts);
     const buysWithUsd = buyYtGroups.filter(g => g.usd > 0);
 
-    const dailyUsd = aggregateDailyGroups(buyYtGroups, days);
+    const hideCurrent = document.getElementById('hide-current').checked;
+    const trim = (arr) => hideCurrent && arr.length > 1 ? arr.slice(0, -1) : arr;
+
+    const dailyUsdAll = aggregateDailyGroups(buyYtGroups, days);
+    const dailyUsd = trim(dailyUsdAll);
     const totalUsd = dailyUsd.reduce((s,d) => s + d.amount, 0);
 
     let mode = 'usd';
     let daily = dailyUsd;
     if (totalUsd === 0 && buyYtGroups.length > 0) {
       mode = 'count';
-      daily = aggregateDailyGroupsByCount(buyYtGroups, days);
+      daily = trim(aggregateDailyGroupsByCount(buyYtGroups, days));
     }
-    const weekly = aggregateWeekly(daily);
+    const weekly = trim(aggregateWeekly(daily));
 
-    renderStats(dailyUsd, buyYtGroups.length, mode === 'count');
+    const buyCountShown = daily.reduce((s,d) => s + d.count, 0);
+    renderStats(dailyUsd, buyCountShown, mode === 'count');
     render(daily, weekly, mode);
 
     const fmtMap = (m) => Array.from(m.entries()).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `${escapeHtml(k)}×${v}`).join(' · ') || '(none)';
@@ -907,6 +926,11 @@ async function load(refreshMode) {
   }
 }
 
+const HIDE_PREF_KEY = 'spectra:yt:hide-current';
+try {
+  document.getElementById('hide-current').checked = localStorage.getItem(HIDE_PREF_KEY) === '1';
+} catch (e) {}
+
 document.getElementById('refresh').addEventListener('click', () => load('force'));
 document.getElementById('clear-cache').addEventListener('click', () => {
   try { localStorage.removeItem(CACHE_KEY); } catch (e) {}
@@ -914,6 +938,10 @@ document.getElementById('clear-cache').addEventListener('click', () => {
   load('force');
 });
 document.getElementById('days-select').addEventListener('change', () => load('use-cache'));
+document.getElementById('hide-current').addEventListener('change', (e) => {
+  try { localStorage.setItem(HIDE_PREF_KEY, e.target.checked ? '1' : '0'); } catch (err) {}
+  load('use-cache');
+});
 load('use-cache');
 </script>
 </body>
