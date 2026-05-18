@@ -239,6 +239,21 @@
 
   .hidden { display: none !important; }
 
+  .diag {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border-radius: 6px;
+    background: rgba(1,247,153,0.04);
+    border: 1px solid rgba(1,247,153,0.2);
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    font-size: 11px;
+    color: rgba(255,255,255,0.75);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .diag b { color: #01f799; font-weight: 600; }
+
   footer {
     margin-top: 24px;
     font-size: 11px;
@@ -275,6 +290,8 @@
   </header>
 
   <div id="status" class="status loading"><span class="spinner"></span>Fetching transactions from Spectra subgraph…</div>
+
+  <div id="diag" class="diag hidden"></div>
 
   <div id="content" class="hidden">
     <h2>Daily Volume</h2>
@@ -314,17 +331,24 @@ const QUERY = `
     ) {
       id
       createdAtTimestamp
+      valueUnderlying
       amountsIn {
         amount
-        asset { symbol decimals type price { value } }
+        asset { id symbol decimals type price { value } }
       }
       amountsOut {
         amount
-        asset { symbol decimals type price { value } }
+        asset { id symbol decimals type price { value } }
       }
     }
   }
 `;
+
+const INTROSPECT = `{
+  AssetType: __type(name: "AssetType") { enumValues { name } }
+  TxType: __type(name: "TransactionType") { enumValues { name } }
+  Tx: __type(name: "Transaction") { fields { name type { name kind ofType { name kind ofType { name kind } } } } }
+}`;
 
 function fmtUsd(n) {
   if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M';
@@ -341,23 +365,36 @@ function isoDay(d) {
   return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0') + '-' + String(d.getUTCDate()).padStart(2,'0');
 }
 
-async function gql(variables) {
+async function gql(query, variables) {
   const res = await fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: QUERY, variables })
+    body: JSON.stringify({ query, variables })
   });
   if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
   const json = await res.json();
   if (json.errors) throw new Error('GraphQL: ' + json.errors.map(e => e.message).join('; '));
-  return json.data.transactions;
+  return json.data;
+}
+
+async function introspect() {
+  try {
+    const d = await gql(INTROSPECT, {});
+    return {
+      assetTypes: (d.AssetType?.enumValues || []).map(v => v.name),
+      txTypes: (d.TxType?.enumValues || []).map(v => v.name),
+    };
+  } catch (e) {
+    return { assetTypes: [], txTypes: [], error: e.message };
+  }
 }
 
 async function fetchAllAmmExchanges(sinceTs) {
   let all = [];
   let cursor = '0';
   while (true) {
-    const batch = await gql({ since: String(sinceTs), cursor, first: PAGE_SIZE });
+    const data = await gql(QUERY, { since: String(sinceTs), cursor, first: PAGE_SIZE });
+    const batch = data.transactions;
     if (batch.length === 0) break;
     all = all.concat(batch);
     if (batch.length < PAGE_SIZE) break;
@@ -366,23 +403,45 @@ async function fetchAllAmmExchanges(sinceTs) {
   return all;
 }
 
+function isYtType(t) {
+  if (!t) return false;
+  const s = String(t).toUpperCase();
+  return s === 'YT' || s === 'FYT' || s === 'YIELD_TOKEN' || s.includes('YIELD');
+}
+function isUnderlyingType(t) {
+  if (!t) return false;
+  const s = String(t).toUpperCase();
+  return s === 'UNDERLYING' || s === 'ASSET' || s === 'BASE';
+}
+function isIbtType(t) {
+  if (!t) return false;
+  return String(t).toUpperCase() === 'IBT';
+}
+
 function isBuyYt(tx) {
-  return tx.amountsOut.some(a => a.asset.type === 'YT');
+  return (tx.amountsOut || []).some(a => a.asset && isYtType(a.asset.type));
 }
 
 function txUsdValue(tx) {
-  const pick = (preferType) => {
-    for (const a of tx.amountsIn) {
-      if (a.asset.type === preferType && a.asset.price && a.asset.price.value) {
-        const amt = Number(a.amount) / Math.pow(10, a.asset.decimals);
+  const tryPriced = (matcher) => {
+    for (const a of tx.amountsIn || []) {
+      if (a.asset && matcher(a.asset.type) && a.asset.price && a.asset.price.value) {
+        const amt = Number(a.amount) / Math.pow(10, a.asset.decimals || 18);
         return amt * parseFloat(a.asset.price.value);
       }
     }
     return null;
   };
-  let v = pick('UNDERLYING');
-  if (v == null) v = pick('IBT');
-  if (v == null) v = pick('PT');
+  let v = tryPriced(isUnderlyingType);
+  if (v == null) v = tryPriced(isIbtType);
+  if (v == null) {
+    for (const a of tx.amountsIn || []) {
+      if (a.asset && a.asset.price && a.asset.price.value) {
+        const amt = Number(a.amount) / Math.pow(10, a.asset.decimals || 18);
+        return amt * parseFloat(a.asset.price.value);
+      }
+    }
+  }
   return v ?? 0;
 }
 
@@ -427,7 +486,7 @@ function aggregateWeekly(daily) {
 }
 
 function buildBarChart(opts) {
-  const { data, maxAmt, chartEl, gridEl, tooltipEl, labelStep, labelKey, dateKey } = opts;
+  const { data, maxAmt, chartEl, gridEl, tooltipEl, labelStep, labelKey, dateKey, countMode } = opts;
   chartEl.innerHTML = '';
   chartEl.appendChild(gridEl);
   gridEl.innerHTML = '';
@@ -441,7 +500,7 @@ function buildBarChart(opts) {
     const lbl = document.createElement('div');
     lbl.className = 'grid-label';
     lbl.style.bottom = (t * 100) + '%';
-    lbl.textContent = fmtUsd(t * max);
+    lbl.textContent = countMode ? String(Math.round(t * max)) : fmtUsd(t * max);
     line.appendChild(lbl);
     gridEl.appendChild(line);
   });
@@ -460,10 +519,13 @@ function buildBarChart(opts) {
       col.appendChild(x);
     }
     col.addEventListener('mouseenter', () => {
+      const amtTxt = d.amount === 0
+        ? 'No purchases'
+        : (countMode ? d.amount + ' transaction' + (d.amount === 1 ? '' : 's') : '$' + d.amount.toLocaleString('en-US', {maximumFractionDigits: 2}));
       tooltipEl.innerHTML =
         '<div class="tt-date">' + d[dateKey] + '</div>' +
-        '<div class="tt-amt">' + (d.amount === 0 ? 'No purchases' : '$' + d.amount.toLocaleString('en-US', {maximumFractionDigits: 2})) + '</div>' +
-        (d.count > 0 ? '<div class="tt-count">' + d.count + ' transaction' + (d.count === 1 ? '' : 's') + '</div>' : '');
+        '<div class="tt-amt">' + amtTxt + '</div>' +
+        (!countMode && d.count > 0 ? '<div class="tt-count">' + d.count + ' transaction' + (d.count === 1 ? '' : 's') + '</div>' : '');
       tooltipEl.classList.add('visible');
     });
     col.addEventListener('mousemove', (e) => {
@@ -480,20 +542,20 @@ function buildBarChart(opts) {
   });
 }
 
-function renderStats(daily) {
-  const total = daily.reduce((s,d) => s + d.amount, 0);
-  const count = daily.reduce((s,d) => s + d.count, 0);
-  const peak = daily.reduce((m,d) => Math.max(m, d.amount), 0);
-  const avg = total / daily.length;
-  document.getElementById('stat-total').textContent = fmtUsdFull(total);
-  document.getElementById('stat-count').textContent = count.toLocaleString('en-US');
-  document.getElementById('stat-peak').textContent = fmtUsdFull(peak);
-  document.getElementById('stat-avg').textContent = fmtUsdFull(avg);
+function renderStats(dailyUsd, totalBuyCount, fallbackCountMode) {
+  const total = dailyUsd.reduce((s,d) => s + d.amount, 0);
+  const peak = dailyUsd.reduce((m,d) => Math.max(m, d.amount), 0);
+  const avg = total / dailyUsd.length;
+  document.getElementById('stat-total').textContent = fallbackCountMode && total === 0 ? 'n/a' : fmtUsdFull(total);
+  document.getElementById('stat-count').textContent = (totalBuyCount ?? 0).toLocaleString('en-US');
+  document.getElementById('stat-peak').textContent = fallbackCountMode && peak === 0 ? 'n/a' : fmtUsdFull(peak);
+  document.getElementById('stat-avg').textContent = fallbackCountMode && total === 0 ? 'n/a' : fmtUsdFull(avg);
 }
 
-function render(daily, weekly) {
+function render(daily, weekly, mode) {
   const dailyMax = Math.max(...daily.map(d => d.amount), 0);
   const weeklyMax = Math.max(...weekly.map(d => d.amount), 0);
+  const isCount = mode === 'count';
   buildBarChart({
     data: daily, maxAmt: dailyMax,
     chartEl: document.getElementById('chart'),
@@ -501,6 +563,7 @@ function render(daily, weekly) {
     tooltipEl: document.getElementById('tooltip'),
     labelStep: daily.length > 20 ? Math.ceil(daily.length / 12) : 1,
     labelKey: 'date', dateKey: 'iso',
+    countMode: isCount,
   });
   buildBarChart({
     data: weekly, maxAmt: weeklyMax,
@@ -509,6 +572,7 @@ function render(daily, weekly) {
     tooltipEl: document.getElementById('wtooltip'),
     labelStep: 1,
     labelKey: 'label', dateKey: 'label',
+    countMode: isCount,
   });
 }
 
@@ -520,20 +584,69 @@ function setStatus(kind, msg) {
   el.innerHTML = kind === 'loading' ? '<span class="spinner"></span>' + msg : msg;
 }
 
+function setDiag(html) {
+  const el = document.getElementById('diag');
+  if (!html) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  el.classList.remove('hidden');
+  el.innerHTML = html;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 async function load() {
   const days = parseInt(document.getElementById('days-select').value, 10);
   document.getElementById('window-days').textContent = days;
   document.getElementById('refresh').disabled = true;
   document.getElementById('content').classList.add('hidden');
+  setDiag(null);
   setStatus('loading', 'Fetching transactions from Spectra subgraph…');
   try {
+    const schema = await introspect();
     const sinceTs = Math.floor(Date.now() / 1000) - days * 86400;
     const all = await fetchAllAmmExchanges(sinceTs);
+
+    const seenOutTypes = new Map();
+    const seenInTypes = new Map();
+    for (const tx of all) {
+      for (const a of tx.amountsOut || []) {
+        const t = a.asset?.type ?? '(none)';
+        seenOutTypes.set(t, (seenOutTypes.get(t) || 0) + 1);
+      }
+      for (const a of tx.amountsIn || []) {
+        const t = a.asset?.type ?? '(none)';
+        seenInTypes.set(t, (seenInTypes.get(t) || 0) + 1);
+      }
+    }
+
     const buys = all.filter(isBuyYt).map(tx => Object.assign(tx, { usd: txUsdValue(tx) }));
-    const daily = aggregateDaily(buys, days);
+    const buysWithUsd = buys.filter(t => t.usd > 0);
+
+    const dailyUsd = aggregateDaily(buys, days);
+    const totalUsd = dailyUsd.reduce((s,d) => s + d.amount, 0);
+
+    let mode = 'usd';
+    let daily = dailyUsd;
+    if (totalUsd === 0 && buys.length > 0) {
+      mode = 'count';
+      daily = aggregateDailyByCount(buys, days);
+    }
     const weekly = aggregateWeekly(daily);
-    renderStats(daily);
-    render(daily, weekly);
+
+    renderStats(dailyUsd, buys.length, mode === 'count');
+    render(daily, weekly, mode);
+
+    const fmtMap = (m) => Array.from(m.entries()).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `${escapeHtml(k)}×${v}`).join(' · ') || '(none)';
+    const parts = [];
+    parts.push(`<b>Fetched:</b> ${all.length} AMM_EXCHANGE tx · <b>Buy YT:</b> ${buys.length} · <b>Priced:</b> ${buysWithUsd.length}`);
+    parts.push(`<b>amountsOut.asset.type:</b> ${fmtMap(seenOutTypes)}`);
+    parts.push(`<b>amountsIn.asset.type:</b> ${fmtMap(seenInTypes)}`);
+    if (schema.assetTypes.length) parts.push(`<b>Schema AssetType enum:</b> ${schema.assetTypes.map(escapeHtml).join(', ')}`);
+    if (mode === 'count') parts.push(`<b>⚠ No USD prices available — bars show transaction count per day.</b>`);
+    if (all.length === 0) parts.push(`<b>⚠ No AMM_EXCHANGE transactions in window. Try a wider time range.</b>`);
+    setDiag(parts.join('<br>'));
+
     setStatus(null);
     document.getElementById('content').classList.remove('hidden');
   } catch (err) {
@@ -542,6 +655,25 @@ async function load() {
   } finally {
     document.getElementById('refresh').disabled = false;
   }
+}
+
+function aggregateDailyByCount(txs, days) {
+  const buckets = new Map();
+  const today = new Date();
+  const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(todayUTC);
+    d.setUTCDate(d.getUTCDate() - i);
+    const iso = isoDay(d);
+    buckets.set(iso, { date: fmtMonthDay(d), iso, amount: 0, count: 0 });
+  }
+  for (const tx of txs) {
+    const d = new Date(Number(tx.createdAtTimestamp) * 1000);
+    const iso = isoDay(d);
+    const b = buckets.get(iso);
+    if (b) { b.amount += 1; b.count += 1; }
+  }
+  return Array.from(buckets.values());
 }
 
 document.getElementById('refresh').addEventListener('click', load);
