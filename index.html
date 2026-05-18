@@ -321,7 +321,7 @@
 const API_URL = 'https://api.goldsky.com/api/public/project_cm55feuq3euos01xjb3w504ls/subgraphs/spectra-flare/prod/gn';
 const PAGE_SIZE = 1000;
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const CACHE_KEY = 'spectra:yt:cache:v2';
+const CACHE_KEY = 'spectra:yt:cache:v3';
 const CACHE_WINDOW_DAYS = 90;
 
 let cache = { txs: [], fetchedAt: 0, windowStartTs: 0, schema: null };
@@ -342,11 +342,11 @@ const QUERY = `
       ibtRate
       amountsIn {
         amount
-        asset { id symbol decimals type price { value } }
+        asset { id symbol decimals type price { value } underlying { symbol decimals price { value } } }
       }
       amountsOut {
         amount
-        asset { id symbol decimals type price { value } }
+        asset { id symbol decimals type price { value } underlying { symbol decimals price { value } } }
       }
     }
   }
@@ -413,7 +413,16 @@ async function fetchAllTransactions(sinceTs) {
 }
 
 function compressTx(tx) {
-  const ca = (a) => [a.amount, a.asset?.type || '', a.asset?.decimals ?? 18, a.asset?.price?.value || null, a.asset?.symbol || ''];
+  const ca = (a) => [
+    a.amount,
+    a.asset?.type || '',
+    a.asset?.decimals ?? 18,
+    a.asset?.price?.value || null,
+    a.asset?.symbol || '',
+    a.asset?.underlying?.decimals ?? null,
+    a.asset?.underlying?.price?.value || null,
+    a.asset?.underlying?.symbol || '',
+  ];
   return {
     i: tx.id,
     a: tx.address || '',
@@ -427,9 +436,17 @@ function compressTx(tx) {
 }
 
 function decompressTx(c) {
-  const xa = ([amount, type, decimals, priceValue, symbol]) => ({
+  const xa = ([amount, type, decimals, priceValue, symbol, uDecimals, uPriceValue, uSymbol]) => ({
     amount,
-    asset: { type, decimals, symbol, price: priceValue ? { value: priceValue } : null },
+    asset: {
+      type, decimals, symbol,
+      price: priceValue ? { value: priceValue } : null,
+      underlying: uDecimals != null ? {
+        decimals: uDecimals,
+        symbol: uSymbol || '',
+        price: uPriceValue ? { value: uPriceValue } : null,
+      } : null,
+    },
   });
   return {
     id: c.i,
@@ -522,8 +539,7 @@ async function ensureCache(mode) {
   return { source: isFullRefetch ? 'full-fetch' : 'incremental', fetched: newTxs.length, cacheAgeMs: 0 };
 }
 
-function isIbtType(t) { return String(t || '').toUpperCase() === 'IBT'; }
-function isPtType(t)  { return String(t || '').toUpperCase() === 'PT'; }
+function isPtType(t) { return String(t || '').toUpperCase() === 'PT'; }
 
 function txHash(tx) {
   const id = tx.id || '';
@@ -580,48 +596,34 @@ function classifyGroup(events) {
   return 'OTHER';
 }
 
+function findUnderlying(events) {
+  for (const ev of events) {
+    for (const a of [...(ev.amountsIn||[]), ...(ev.amountsOut||[])]) {
+      const u = a.asset?.underlying;
+      if (u && u.price && u.price.value) {
+        return { decimals: u.decimals ?? 18, price: parseFloat(u.price.value), symbol: u.symbol || '' };
+      }
+    }
+  }
+  return null;
+}
+
 function groupUsdValue(events, classification) {
+  const u = findUnderlying(events);
+  if (!u || !u.price) return 0;
+
   const dep = events.find(e => e.type === 'FUTURE_VAULT_DEPOSIT');
   const amm = events.find(e => e.type === 'AMM_EXCHANGE');
   const wdr = events.find(e => e.type === 'FUTURE_VAULT_WITHDRAW');
-
-  const ibtAmountIn = (ev) => {
-    if (!ev) return 0;
-    for (const a of ev.amountsIn || []) {
-      if (a.asset && isIbtType(a.asset.type)) {
-        return Number(a.amount) / Math.pow(10, a.asset.decimals || 18);
-      }
-    }
-    return 0;
-  };
-  const ibtAmountOut = (ev) => {
-    if (!ev) return 0;
-    for (const a of ev.amountsOut || []) {
-      if (a.asset && isIbtType(a.asset.type)) {
-        return Number(a.amount) / Math.pow(10, a.asset.decimals || 18);
-      }
-    }
-    return 0;
-  };
-  const ibtPrice = (ev) => {
-    if (!ev) return 0;
-    for (const a of [...(ev.amountsIn||[]), ...(ev.amountsOut||[])]) {
-      if (a.asset && isIbtType(a.asset.type) && a.asset.price && a.asset.price.value) {
-        return parseFloat(a.asset.price.value);
-      }
-    }
-    return 0;
-  };
+  const vu = (ev) => ev ? Number(ev.valueUnderlying || 0) / Math.pow(10, u.decimals) : 0;
 
   if (classification === 'BUY_YT') {
-    const netIbt = ibtAmountIn(dep) - ibtAmountOut(amm);
-    const price = ibtPrice(dep) || ibtPrice(amm);
-    return netIbt * price;
+    const net = vu(dep) - vu(amm);
+    return Math.max(0, net) * u.price;
   }
   if (classification === 'SELL_YT') {
-    const netIbt = ibtAmountOut(wdr) - ibtAmountIn(amm);
-    const price = ibtPrice(wdr) || ibtPrice(amm);
-    return netIbt * price;
+    const net = vu(wdr) - vu(amm);
+    return Math.max(0, net) * u.price;
   }
   return 0;
 }
