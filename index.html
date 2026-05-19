@@ -1427,6 +1427,7 @@ async function load(refreshMode) {
 
   try {
     const cacheInfo = await ensureCache(refreshMode || 'use-cache');
+    const schema = cache.schema || { assetTypes: [], txTypes: [], queryFields: [], futureFields: [], assetFields: [] };
 
     let token = document.getElementById('token-select').value;
     let detected = null;
