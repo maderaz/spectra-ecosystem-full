@@ -614,7 +614,7 @@
 const API_URL = 'https://api.goldsky.com/api/public/project_cm55feuq3euos01xjb3w504ls/subgraphs/spectra-flare/prod/gn';
 const PAGE_SIZE = 1000;
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const CACHE_KEY = 'spectra:yt:cache:v4';
+const CACHE_KEY = 'spectra:yt:cache:v5';
 const TOKEN_PREF_KEY = 'spectra:yt:token';
 const ADDR_PREF_KEY = 'spectra:yt:addr';
 
@@ -633,7 +633,7 @@ function cacheWindowDays() {
   return Math.max(90, daysSinceJan1());
 }
 
-let cache = { txs: [], fetchedAt: 0, windowStartTs: 0, schema: null };
+let cache = { txs: [], fetchedAt: 0, windowStartTs: 0, schema: null, priceIndex: null };
 
 const QUERY = `
   query AllTx($since: BigInt!, $cursor: BigInt!, $first: Int!) {
@@ -649,14 +649,31 @@ const QUERY = `
       type
       valueUnderlying
       ibtRate
+      userInTransaction { id }
+      futureInTransaction {
+        id
+        ibt { id symbol decimals }
+        underlying { id symbol decimals price { value } }
+      }
       amountsIn {
         amount
-        asset { id symbol decimals type price { value } underlying { symbol decimals price { value } } }
+        asset { id symbol decimals type price { value } underlying { id symbol decimals price { value } } }
       }
       amountsOut {
         amount
-        asset { id symbol decimals type price { value } underlying { symbol decimals price { value } } }
+        asset { id symbol decimals type price { value } underlying { id symbol decimals price { value } } }
       }
+    }
+  }
+`;
+
+const PRICE_QUERY = `
+  query PriceIndex {
+    assets(first: 1000) {
+      id symbol type decimals
+      price { value }
+      lastIBTRate
+      underlying { id symbol decimals price { value } }
     }
   }
 `;
@@ -732,7 +749,9 @@ function compressTx(tx) {
     a.asset?.underlying?.price?.value || null,
     a.asset?.underlying?.symbol || '',
     a.asset?.id || '',
+    a.asset?.underlying?.id || '',
   ];
+  const fut = tx.futureInTransaction || null;
   return {
     i: tx.id,
     a: tx.address || '',
@@ -740,19 +759,28 @@ function compressTx(tx) {
     ty: tx.type || '',
     vu: tx.valueUnderlying || '0',
     ir: tx.ibtRate || null,
+    fr: tx.userInTransaction?.id || '',
+    fIbtSym: fut?.ibt?.symbol || '',
+    fIbtDec: fut?.ibt?.decimals ?? null,
+    fIbtId:  fut?.ibt?.id || '',
+    fUndSym: fut?.underlying?.symbol || '',
+    fUndDec: fut?.underlying?.decimals ?? null,
+    fUndPr:  fut?.underlying?.price?.value || null,
+    fUndId:  fut?.underlying?.id || '',
     in: (tx.amountsIn || []).map(ca),
     out: (tx.amountsOut || []).map(ca),
   };
 }
 
 function decompressTx(c) {
-  const xa = ([amount, type, decimals, priceValue, symbol, uDecimals, uPriceValue, uSymbol, assetId]) => ({
+  const xa = ([amount, type, decimals, priceValue, symbol, uDecimals, uPriceValue, uSymbol, assetId, uId]) => ({
     amount,
     asset: {
       id: assetId || '',
       type, decimals, symbol,
       price: priceValue ? { value: priceValue } : null,
       underlying: uDecimals != null ? {
+        id: uId || '',
         decimals: uDecimals,
         symbol: uSymbol || '',
         price: uPriceValue ? { value: uPriceValue } : null,
@@ -766,6 +794,16 @@ function decompressTx(c) {
     type: c.ty,
     valueUnderlying: c.vu,
     ibtRate: c.ir,
+    from: c.fr || '',
+    future: (c.fIbtSym || c.fUndSym) ? {
+      ibt: c.fIbtSym ? { id: c.fIbtId || '', symbol: c.fIbtSym, decimals: c.fIbtDec ?? 18 } : null,
+      underlying: c.fUndSym ? {
+        id: c.fUndId || '',
+        symbol: c.fUndSym,
+        decimals: c.fUndDec ?? 18,
+        price: c.fUndPr ? { value: c.fUndPr } : null,
+      } : null,
+    } : null,
     amountsIn: (c.in || []).map(xa),
     amountsOut: (c.out || []).map(xa),
   };
@@ -781,6 +819,7 @@ function loadCacheFromStorage() {
     cache.fetchedAt = parsed.f || 0;
     cache.windowStartTs = parsed.s || 0;
     cache.schema = parsed.sc || null;
+    cache.priceIndex = parsed.pi || null;
     return true;
   } catch (e) {
     console.warn('Cache load failed:', e);
@@ -795,6 +834,7 @@ function saveCacheToStorage() {
       f: cache.fetchedAt,
       s: cache.windowStartTs,
       sc: cache.schema,
+      pi: cache.priceIndex,
       t: cache.txs.map(compressTx),
     };
     localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
@@ -809,6 +849,33 @@ function mergeTxs(existing, incoming, dropBefore) {
   return Array.from(map.values())
     .filter(t => Number(t.createdAtTimestamp) >= dropBefore)
     .sort((a, b) => Number(a.createdAtTimestamp) - Number(b.createdAtTimestamp));
+}
+
+async function fetchPriceIndex() {
+  try {
+    const d = await gql(PRICE_QUERY, {});
+    const map = {};
+    for (const a of (d.assets || [])) {
+      const id = String(a.id || '').toLowerCase();
+      if (!id) continue;
+      map[id] = {
+        id,
+        symbol: a.symbol || '',
+        type: a.type || '',
+        decimals: a.decimals ?? 18,
+        price: a.price?.value || null,
+        ibtRate: a.lastIBTRate || null,
+        underlyingId: String(a.underlying?.id || '').toLowerCase(),
+        underlyingSymbol: a.underlying?.symbol || '',
+        underlyingDecimals: a.underlying?.decimals ?? null,
+        underlyingPrice: a.underlying?.price?.value || null,
+      };
+    }
+    return { map, fetchedAt: Math.floor(Date.now() / 1000) };
+  } catch (e) {
+    console.warn('Price index fetch failed:', e);
+    return null;
+  }
 }
 
 async function ensureCache(mode) {
@@ -839,6 +906,9 @@ async function ensureCache(mode) {
 
   if (!cache.schema) {
     cache.schema = await introspect();
+  }
+  if (!cache.priceIndex || mode === 'force') {
+    cache.priceIndex = await fetchPriceIndex();
   }
 
   const newTxs = await fetchAllTransactions(fetchSince);
@@ -949,13 +1019,38 @@ function classifyGroup(events) {
   return 'OTHER';
 }
 
+function priceFromIndex(assetId) {
+  const idx = cache.priceIndex?.map;
+  if (!idx) return null;
+  const id = String(assetId || '').toLowerCase();
+  const info = idx[id];
+  if (!info) return null;
+  if (info.price) return { decimals: info.decimals, price: parseFloat(info.price), symbol: info.symbol };
+  if (info.underlyingPrice && info.underlyingDecimals != null) {
+    return { decimals: info.underlyingDecimals, price: parseFloat(info.underlyingPrice), symbol: info.underlyingSymbol };
+  }
+  if (info.underlyingId) {
+    const u = idx[info.underlyingId];
+    if (u && u.price) return { decimals: u.decimals, price: parseFloat(u.price), symbol: u.symbol };
+  }
+  return null;
+}
+
 function findUnderlying(events) {
+  // 1. Inline underlying.price from event assets (subgraph nested path)
   for (const ev of events) {
     for (const a of [...(ev.amountsIn||[]), ...(ev.amountsOut||[])]) {
       const u = a.asset?.underlying;
       if (u && u.price && u.price.value) {
         return { decimals: u.decimals ?? 18, price: parseFloat(u.price.value), symbol: u.symbol || '' };
       }
+    }
+  }
+  // 2. Lookup in cached price index by each asset.id (covers asset.price + chained underlying.price)
+  for (const ev of events) {
+    for (const a of [...(ev.amountsIn||[]), ...(ev.amountsOut||[])]) {
+      const p = priceFromIndex(a.asset?.id);
+      if (p) return p;
     }
   }
   return null;
@@ -1462,6 +1557,19 @@ async function load(refreshMode) {
     parts.push(cacheLine);
     parts.push(`<b>Window:</b> last ${days}d → ${all.length} subgraph tx in ${groups.size} on-chain tx`);
     parts.push(`<b>Classification of on-chain tx:</b> ${fmtMap(classCounts)}`);
+    if (cache.priceIndex) {
+      const idx = cache.priceIndex.map || {};
+      const all = Object.values(idx);
+      const priced = all.filter(a => a.price);
+      const undPriced = all.filter(a => a.underlyingPrice);
+      const byTypePriced = new Map();
+      for (const a of priced) byTypePriced.set(a.type, (byTypePriced.get(a.type) || 0) + 1);
+      const sample = priced.slice(0, 6).map(a => `${escapeHtml(a.symbol || '?')}=$${parseFloat(a.price).toFixed(4)}`).join(' · ');
+      parts.push(`<b>Price index:</b> ${all.length} assets · ${priced.length} with asset.price · ${undPriced.length} with underlying.price${byTypePriced.size ? ' · by type: ' + fmtMap(byTypePriced) : ''}`);
+      if (sample) parts.push(`<b>Sample priced assets:</b> ${sample}`);
+    } else {
+      parts.push(`<b>Price index:</b> not loaded`);
+    }
     parts.push(`<b>${escapeHtml(token)}:</b> ${A.buyLabel} ${buyGroups.length} · ${A.sellLabel} ${sellGroups.length} · Total ${allTokenGroups.length}`);
     if (samples) parts.push(`<b>Sample ${escapeHtml(token)} activity (most recent):</b><br>${samples}`);
     if (mode === 'count') parts.push(`<b>⚠ Couldn't compute USD for any ${escapeHtml(token)} group — bars show count per day.</b>`);
@@ -1532,10 +1640,21 @@ function fmtDateTime(ts) {
 }
 
 function groupPoolSymbol(events) {
+  // Prefer the future's IBT symbol (matches production "stXRP", "sw-sFLR").
+  for (const ev of events) {
+    if (ev.future?.ibt?.symbol) return ev.future.ibt.symbol;
+  }
+  // Fallback: scan amounts for any IBT-typed asset.
   for (const ev of events) {
     for (const a of [...(ev.amountsIn||[]), ...(ev.amountsOut||[])]) {
-      const sym = a.asset?.underlying?.symbol;
-      if (sym) return sym;
+      if (String(a.asset?.type || '').toUpperCase() === 'IBT' && a.asset.symbol) return a.asset.symbol;
+    }
+  }
+  // Last resort: underlying symbol.
+  for (const ev of events) {
+    if (ev.future?.underlying?.symbol) return ev.future.underlying.symbol;
+    for (const a of [...(ev.amountsIn||[]), ...(ev.amountsOut||[])]) {
+      if (a.asset?.underlying?.symbol) return a.asset.underlying.symbol;
     }
   }
   return '—';
@@ -1543,7 +1662,7 @@ function groupPoolSymbol(events) {
 
 function groupFromAddress(events) {
   for (const ev of events) {
-    if (ev.address) return ev.address;
+    if (ev.from) return ev.from;
   }
   return '';
 }
