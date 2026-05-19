@@ -15,6 +15,102 @@
     min-height: 100vh;
   }
   .container { max-width: 980px; margin: 0 auto; }
+  .top-nav {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    margin-bottom: 24px;
+  }
+  .nav-link {
+    color: rgba(255,255,255,0.55);
+    text-decoration: none;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .nav-link:hover { color: #fff; }
+  .nav-link.active {
+    color: #01f799;
+    border-bottom-color: #01f799;
+  }
+
+  .activity-info {
+    font-size: 12px;
+    color: rgba(255,255,255,0.55);
+    margin: 8px 0 12px;
+  }
+  .activity-tablewrap {
+    background: #050505;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .activity-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .activity-table thead th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: rgba(255,255,255,0.45);
+    padding: 12px 14px;
+    background: rgba(255,255,255,0.02);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    white-space: nowrap;
+  }
+  .activity-table th.num, .activity-table td.num { text-align: right; }
+  .activity-table tbody td {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    white-space: nowrap;
+    color: rgba(255,255,255,0.88);
+    vertical-align: middle;
+  }
+  .activity-table tbody tr:last-child td { border-bottom: none; }
+  .activity-table tbody tr:hover td { background: rgba(255,255,255,0.025); }
+  .activity-table .mono {
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    font-size: 12px;
+    color: rgba(255,255,255,0.75);
+  }
+  .activity-table .pool {
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    font-size: 11px;
+    color: rgba(255,255,255,0.7);
+  }
+  .activity-table .time {
+    font-variant-numeric: tabular-nums;
+    color: rgba(255,255,255,0.6);
+    font-size: 11px;
+  }
+  .activity-table .usd {
+    font-variant-numeric: tabular-nums;
+    color: rgba(255,255,255,0.9);
+    font-weight: 500;
+  }
+  .activity-table .usd.zero { color: rgba(255,255,255,0.3); font-weight: 400; }
+  .type-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    border: 1px solid;
+  }
+  .type-chip.buy-yt    { color: #01f799; border-color: rgba(1,247,153,0.35); background: rgba(1,247,153,0.06); }
+  .type-chip.sell-yt   { color: #ff8888; border-color: rgba(255,136,136,0.35); background: rgba(255,136,136,0.06); }
+  .type-chip.buy-pt    { color: #6dd0ff; border-color: rgba(109,208,255,0.35); background: rgba(109,208,255,0.06); }
+  .type-chip.sell-pt   { color: #ffa766; border-color: rgba(255,167,102,0.35); background: rgba(255,167,102,0.06); }
+  .type-chip.add-lp    { color: #b890ff; border-color: rgba(184,144,255,0.35); background: rgba(184,144,255,0.06); }
+  .type-chip.remove-lp { color: #ffcf66; border-color: rgba(255,207,102,0.35); background: rgba(255,207,102,0.06); }
+  .type-chip.other     { color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.15); background: rgba(255,255,255,0.03); }
   header { margin-bottom: 32px; }
   .header-row {
     display: flex;
@@ -387,6 +483,10 @@
 </head>
 <body>
 <div class="container">
+  <nav class="top-nav">
+    <a href="#dashboard" class="nav-link" id="nav-dashboard">Dashboard</a>
+    <a href="#activity" class="nav-link" id="nav-activity">Activity</a>
+  </nav>
   <header>
     <div class="header-row">
       <div>
@@ -439,6 +539,7 @@
 
   <div id="diag" class="diag hidden"></div>
 
+  <div id="page-dashboard">
   <div id="content" class="hidden">
     <div class="chart-section">
       <div class="chart-header">
@@ -486,6 +587,26 @@
     </div>
 
     <footer>Hover bars for detail · Aggregated live from on-chain events via Goldsky</footer>
+  </div>
+  </div>
+
+  <div id="page-activity" class="hidden">
+    <div class="activity-info" id="activity-info">&nbsp;</div>
+    <div class="activity-tablewrap">
+      <table class="activity-table">
+        <thead>
+          <tr>
+            <th>Transaction</th>
+            <th>Type</th>
+            <th class="num">Notional Value</th>
+            <th>Time</th>
+            <th>Pool</th>
+            <th>From</th>
+          </tr>
+        </thead>
+        <tbody id="activity-tbody"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -996,6 +1117,73 @@ function render(total, buy, sell, mode) {
   renderOne(sell, 'sell');
 }
 
+function renderActivityTable(groups) {
+  const tbody = document.getElementById('activity-tbody');
+  const info = document.getElementById('activity-info');
+  tbody.innerHTML = '';
+  const total = groups.length;
+  if (total === 0) {
+    info.textContent = 'No activity in the selected window.';
+    return;
+  }
+  const shown = Math.min(total, ACTIVITY_LIMIT);
+  const slice = groups.slice(0, shown);
+
+  const frag = document.createDocumentFragment();
+  for (const g of slice) {
+    const tr = document.createElement('tr');
+
+    const txTd = document.createElement('td');
+    const txEl = document.createElement('span');
+    txEl.className = 'mono';
+    txEl.textContent = shortHex(g.hash);
+    txTd.appendChild(txEl);
+    tr.appendChild(txTd);
+
+    const typeTd = document.createElement('td');
+    const chip = document.createElement('span');
+    chip.className = 'type-chip ' + (CLASS_CHIP_CLASS[g.cls] || 'other');
+    chip.textContent = CLASS_LABELS[g.cls] || g.cls;
+    typeTd.appendChild(chip);
+    tr.appendChild(typeTd);
+
+    const usdTd = document.createElement('td');
+    usdTd.className = 'num';
+    const usdSpan = document.createElement('span');
+    const usdTxt = fmtUsdLine(g.usd);
+    if (usdTxt) { usdSpan.className = 'usd'; usdSpan.textContent = usdTxt; }
+    else { usdSpan.className = 'usd zero'; usdSpan.textContent = '—'; }
+    usdTd.appendChild(usdSpan);
+    tr.appendChild(usdTd);
+
+    const tmTd = document.createElement('td');
+    tmTd.className = 'time';
+    tmTd.textContent = fmtDateTime(g.ts);
+    tr.appendChild(tmTd);
+
+    const poolTd = document.createElement('td');
+    const poolEl = document.createElement('span');
+    poolEl.className = 'pool';
+    poolEl.textContent = groupPoolSymbol(g.events);
+    poolTd.appendChild(poolEl);
+    tr.appendChild(poolTd);
+
+    const fromTd = document.createElement('td');
+    const fromEl = document.createElement('span');
+    fromEl.className = 'mono';
+    fromEl.textContent = shortHex(groupFromAddress(g.events));
+    fromTd.appendChild(fromEl);
+    tr.appendChild(fromTd);
+
+    frag.appendChild(tr);
+  }
+  tbody.appendChild(frag);
+
+  info.textContent = shown < total
+    ? `Showing ${shown.toLocaleString('en-US')} most recent of ${total.toLocaleString('en-US')} transactions.`
+    : `${total.toLocaleString('en-US')} transaction${total === 1 ? '' : 's'} in the selected window.`;
+}
+
 function drawBarChartToCanvas(ctx, W, H, data, opts) {
   const LEFT = 108, RIGHT = 32, TOP = 32, BOTTOM = 68;
   const plotW = W - LEFT - RIGHT;
@@ -1117,12 +1305,19 @@ function updateAddrDetect(addr, detected) {
 
 function updateLabelsForToken(token, days, isYtd, addr, detected) {
   const A = ACTIONS[token];
-  const tokenLabel = (addr && detected && detected.symbol) ? `${detected.symbol} (${detected.type})` : A.title;
-  document.getElementById('title').textContent = tokenLabel;
+  const page = currentPage();
   const windowTxt = isYtd ? `year to date (since Jan 1 · ${days} days)` : `over the last ${days} days`;
   const scopeTxt = addr ? ` for one address` : '';
-  document.getElementById('subtitle').textContent =
-    `Combined ${A.buyLabel.toLowerCase()} + ${A.sellLabel.toLowerCase()} volume ${windowTxt}${scopeTxt}`;
+  if (page === 'activity') {
+    const t = (addr && detected && detected.symbol) ? `${detected.symbol} (${detected.type})` : 'Network Activity';
+    document.getElementById('title').textContent = t;
+    document.getElementById('subtitle').textContent = `On-chain transactions ${windowTxt}${scopeTxt}`;
+  } else {
+    const tokenLabel = (addr && detected && detected.symbol) ? `${detected.symbol} (${detected.type})` : A.title;
+    document.getElementById('title').textContent = tokenLabel;
+    document.getElementById('subtitle').textContent =
+      `Combined ${A.buyLabel.toLowerCase()} + ${A.sellLabel.toLowerCase()} volume ${windowTxt}${scopeTxt}`;
+  }
   document.getElementById('stat-buy-label').textContent = `${A.buyLabel} Volume`;
   document.getElementById('stat-sell-label').textContent = `${A.sellLabel} Volume`;
   document.getElementById('h2-total').textContent = `Daily Total Volume`;
@@ -1201,6 +1396,17 @@ async function load(refreshMode) {
     sellGroups.sort((a, b) => b.ts - a.ts);
     const allTokenGroups = [...buyGroups, ...sellGroups];
 
+    const activityGroups = [];
+    for (const [hash, events] of groups) {
+      if (addr && !groupTouchesAddr(events, addr)) continue;
+      const c = classByGroup.get(hash);
+      const ts = Math.min(...events.map(e => Number(e.createdAtTimestamp)));
+      const usd = groupUsdValue(events, c);
+      activityGroups.push({ hash, events, ts, cls: c, usd });
+    }
+    activityGroups.sort((a, b) => b.ts - a.ts);
+    renderActivityTable(activityGroups, days, isYtd);
+
     const hideCurrent = document.getElementById('hide-current').checked;
     const trim = (arr) => hideCurrent && arr.length > 1 ? arr.slice(0, -1) : arr;
 
@@ -1275,6 +1481,72 @@ async function load(refreshMode) {
 const HIDE_PREF_KEY = 'spectra:yt:hide-current';
 const COLOR_PREF_KEY = 'spectra:yt:bar-color';
 const DEFAULT_BAR_COLOR = '#01f799';
+const ACTIVITY_LIMIT = 1000;
+
+const CLASS_LABELS = {
+  BUY_YT: 'Buy YT', SELL_YT: 'Sell YT',
+  BUY_PT: 'Buy PT', SELL_PT: 'Sell PT',
+  ADD_LIQUIDITY: 'Add Liquidity', REMOVE_LIQUIDITY: 'Remove Liquidity',
+  SPLIT: 'Split', COMBINE: 'Combine',
+  SWAP: 'Swap', OTHER_COMPOUND: 'Compound', OTHER: 'Other',
+};
+const CLASS_CHIP_CLASS = {
+  BUY_YT: 'buy-yt', SELL_YT: 'sell-yt',
+  BUY_PT: 'buy-pt', SELL_PT: 'sell-pt',
+  ADD_LIQUIDITY: 'add-lp', REMOVE_LIQUIDITY: 'remove-lp',
+  SPLIT: 'other', COMBINE: 'other', SWAP: 'other',
+  OTHER_COMPOUND: 'other', OTHER: 'other',
+};
+
+function currentPage() {
+  return window.location.hash === '#activity' ? 'activity' : 'dashboard';
+}
+
+function applyPageVisibility() {
+  const page = currentPage();
+  document.getElementById('page-dashboard').classList.toggle('hidden', page !== 'dashboard');
+  document.getElementById('page-activity').classList.toggle('hidden', page !== 'activity');
+  document.getElementById('stats').style.display = (page === 'dashboard') ? '' : 'none';
+  document.getElementById('nav-dashboard').classList.toggle('active', page === 'dashboard');
+  document.getElementById('nav-activity').classList.toggle('active', page === 'activity');
+}
+
+function shortHex(s) {
+  if (!s) return '';
+  const v = String(s).toLowerCase();
+  if (v.length < 12) return v;
+  return v.slice(0, 6) + '…' + v.slice(-4);
+}
+
+function fmtUsdLine(v) {
+  if (!isFinite(v) || v <= 0) return null;
+  if (v < 0.01) return '<$0.01';
+  if (v < 1000) return '$' + v.toFixed(2);
+  return '$' + Math.round(v).toLocaleString('en-US');
+}
+
+function fmtDateTime(ts) {
+  const d = new Date(ts * 1000);
+  const pad = (n) => String(n).padStart(2,'0');
+  return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}, ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function groupPoolSymbol(events) {
+  for (const ev of events) {
+    for (const a of [...(ev.amountsIn||[]), ...(ev.amountsOut||[])]) {
+      const sym = a.asset?.underlying?.symbol;
+      if (sym) return sym;
+    }
+  }
+  return '—';
+}
+
+function groupFromAddress(events) {
+  for (const ev of events) {
+    if (ev.address) return ev.address;
+  }
+  return '';
+}
 
 function setBarColor(c, persist) {
   document.documentElement.style.setProperty('--bar-color', c);
@@ -1330,6 +1602,11 @@ document.getElementById('bar-color').addEventListener('input', (e) => {
 document.getElementById('color-reset').addEventListener('click', () => {
   setBarColor(DEFAULT_BAR_COLOR);
 });
+window.addEventListener('hashchange', () => {
+  applyPageVisibility();
+  load('use-cache');
+});
+applyPageVisibility();
 const tokenSlug = () => document.getElementById('token-select').value.toLowerCase();
 document.getElementById('dl-total').addEventListener('click', () => {
   exportChartPng(latestCharts.total,
