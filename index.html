@@ -650,11 +650,7 @@ const QUERY = `
       valueUnderlying
       ibtRate
       userInTransaction { id }
-      futureInTransaction {
-        id
-        ibt { id symbol decimals }
-        underlying { id symbol decimals price { value } }
-      }
+      futureInTransaction { id }
       amountsIn {
         amount
         asset { id symbol decimals type price { value } underlying { id symbol decimals price { value } } }
@@ -682,6 +678,8 @@ const INTROSPECT = `{
   AssetType: __type(name: "AssetType") { enumValues { name } }
   TxType: __type(name: "TransactionType") { enumValues { name } }
   Query: __type(name: "Query") { fields { name } }
+  Future: __type(name: "Future") { fields { name type { name kind ofType { name kind } } } }
+  Asset:  __type(name: "Asset")  { fields { name type { name kind ofType { name kind } } } }
 }`;
 
 function fmtUsd(n) {
@@ -718,9 +716,11 @@ async function introspect() {
       assetTypes: (d.AssetType?.enumValues || []).map(v => v.name),
       txTypes: (d.TxType?.enumValues || []).map(v => v.name),
       queryFields: (d.Query?.fields || []).map(f => f.name),
+      futureFields: (d.Future?.fields || []).map(f => f.name),
+      assetFields: (d.Asset?.fields || []).map(f => f.name),
     };
   } catch (e) {
-    return { assetTypes: [], txTypes: [], queryFields: [], error: e.message };
+    return { assetTypes: [], txTypes: [], queryFields: [], futureFields: [], assetFields: [], error: e.message };
   }
 }
 
@@ -751,7 +751,6 @@ function compressTx(tx) {
     a.asset?.id || '',
     a.asset?.underlying?.id || '',
   ];
-  const fut = tx.futureInTransaction || null;
   return {
     i: tx.id,
     a: tx.address || '',
@@ -760,13 +759,7 @@ function compressTx(tx) {
     vu: tx.valueUnderlying || '0',
     ir: tx.ibtRate || null,
     fr: tx.userInTransaction?.id || '',
-    fIbtSym: fut?.ibt?.symbol || '',
-    fIbtDec: fut?.ibt?.decimals ?? null,
-    fIbtId:  fut?.ibt?.id || '',
-    fUndSym: fut?.underlying?.symbol || '',
-    fUndDec: fut?.underlying?.decimals ?? null,
-    fUndPr:  fut?.underlying?.price?.value || null,
-    fUndId:  fut?.underlying?.id || '',
+    fId: tx.futureInTransaction?.id || '',
     in: (tx.amountsIn || []).map(ca),
     out: (tx.amountsOut || []).map(ca),
   };
@@ -795,15 +788,7 @@ function decompressTx(c) {
     valueUnderlying: c.vu,
     ibtRate: c.ir,
     from: c.fr || '',
-    future: (c.fIbtSym || c.fUndSym) ? {
-      ibt: c.fIbtSym ? { id: c.fIbtId || '', symbol: c.fIbtSym, decimals: c.fIbtDec ?? 18 } : null,
-      underlying: c.fUndSym ? {
-        id: c.fUndId || '',
-        symbol: c.fUndSym,
-        decimals: c.fUndDec ?? 18,
-        price: c.fUndPr ? { value: c.fUndPr } : null,
-      } : null,
-    } : null,
+    futureId: c.fId || '',
     amountsIn: (c.in || []).map(xa),
     amountsOut: (c.out || []).map(xa),
   };
@@ -1567,6 +1552,14 @@ async function load(refreshMode) {
       const sample = priced.slice(0, 6).map(a => `${escapeHtml(a.symbol || '?')}=$${parseFloat(a.price).toFixed(4)}`).join(' · ');
       parts.push(`<b>Price index:</b> ${all.length} assets · ${priced.length} with asset.price · ${undPriced.length} with underlying.price${byTypePriced.size ? ' · by type: ' + fmtMap(byTypePriced) : ''}`);
       if (sample) parts.push(`<b>Sample priced assets:</b> ${sample}`);
+      if (priced.length === 0 && undPriced.length === 0) {
+        if (schema.futureFields?.length) parts.push(`<b>Future entity fields:</b> ${schema.futureFields.map(escapeHtml).join(', ')}`);
+        if (schema.assetFields?.length) parts.push(`<b>Asset entity fields:</b> ${schema.assetFields.map(escapeHtml).join(', ')}`);
+        if (schema.queryFields?.length) {
+          const priceRelated = schema.queryFields.filter(f => /price/i.test(f));
+          if (priceRelated.length) parts.push(`<b>Price-related root queries:</b> ${priceRelated.map(escapeHtml).join(', ')}`);
+        }
+      }
     } else {
       parts.push(`<b>Price index:</b> not loaded`);
     }
@@ -1640,19 +1633,14 @@ function fmtDateTime(ts) {
 }
 
 function groupPoolSymbol(events) {
-  // Prefer the future's IBT symbol (matches production "stXRP", "sw-sFLR").
-  for (const ev of events) {
-    if (ev.future?.ibt?.symbol) return ev.future.ibt.symbol;
-  }
-  // Fallback: scan amounts for any IBT-typed asset.
+  // Prefer an IBT-typed asset symbol (matches production "stXRP", "sw-sFLR").
   for (const ev of events) {
     for (const a of [...(ev.amountsIn||[]), ...(ev.amountsOut||[])]) {
       if (String(a.asset?.type || '').toUpperCase() === 'IBT' && a.asset.symbol) return a.asset.symbol;
     }
   }
-  // Last resort: underlying symbol.
+  // Fallback: any underlying symbol from the asset chain.
   for (const ev of events) {
-    if (ev.future?.underlying?.symbol) return ev.future.underlying.symbol;
     for (const a of [...(ev.amountsIn||[]), ...(ev.amountsOut||[])]) {
       if (a.asset?.underlying?.symbol) return a.asset.underlying.symbol;
     }
