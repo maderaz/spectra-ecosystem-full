@@ -706,9 +706,6 @@ function daysSinceJan1() {
   const jan1 = new Date(now.getFullYear(), 0, 1);
   return Math.ceil((now - jan1) / 86400000);
 }
-function cacheWindowDays() {
-  return Math.max(90, daysSinceJan1());
-}
 
 let cache = { txs: [], fetchedAt: 0, windowStartTs: 0, schema: null, priceIndex: null };
 
@@ -748,6 +745,10 @@ const PRICE_QUERY = `
       lastIBTRate
       underlying { id symbol decimals price { value } }
     }
+    assetPrices(first: 1000, orderBy: createdAtTimestamp, orderDirection: desc) {
+      value
+      asset { id }
+    }
   }
 `;
 
@@ -759,6 +760,8 @@ const INTROSPECT = `{
   Asset:  __type(name: "Asset")  { fields { name type { name kind ofType { name kind } } } }
   Transaction: __type(name: "Transaction") { fields { name type { name kind ofType { name kind } } } }
   Account: __type(name: "Account") { fields { name type { name kind ofType { name kind } } } }
+  Chainlink: __type(name: "ChainlinkAggregatorProxy") { fields { name type { name kind ofType { name kind } } } }
+  AssetPrice: __type(name: "AssetPrice") { fields { name } }
 }`;
 
 function fmtUsd(n) {
@@ -799,9 +802,11 @@ async function introspect() {
       assetFields: (d.Asset?.fields || []).map(f => f.name),
       txFields: (d.Transaction?.fields || []).map(f => f.name),
       accountFields: (d.Account?.fields || []).map(f => f.name),
+      chainlinkFields: (d.Chainlink?.fields || []).map(f => f.name),
+      assetPriceFields: (d.AssetPrice?.fields || []).map(f => f.name),
     };
   } catch (e) {
-    return { assetTypes: [], txTypes: [], queryFields: [], futureFields: [], assetFields: [], txFields: [], accountFields: [], error: e.message };
+    return { assetTypes: [], txTypes: [], queryFields: [], futureFields: [], assetFields: [], txFields: [], accountFields: [], chainlinkFields: [], assetPriceFields: [], error: e.message };
   }
 }
 
@@ -937,16 +942,29 @@ async function fetchPriceIndex() {
         underlyingPrice: a.underlying?.price?.value || null,
       };
     }
-    return { map, fetchedAt: Math.floor(Date.now() / 1000) };
+    // Overlay latest AssetPrice entity values (most recent first → first seen wins).
+    const seen = new Set();
+    let priceEntities = 0;
+    for (const p of (d.assetPrices || [])) {
+      const id = String(p.asset?.id || '').toLowerCase();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      if (p.value == null) continue;
+      priceEntities++;
+      if (map[id]) { if (!map[id].price) map[id].price = p.value; }
+      else map[id] = { id, symbol: '', type: '', decimals: 18, price: p.value, ibtRate: null, underlyingId: '', underlyingSymbol: '', underlyingDecimals: null, underlyingPrice: null };
+    }
+    return { map, fetchedAt: Math.floor(Date.now() / 1000), priceEntities };
   } catch (e) {
     console.warn('Price index fetch failed:', e);
     return null;
   }
 }
 
-async function ensureCache(mode) {
+async function ensureCache(mode, windowDays) {
   const nowSec = Math.floor(Date.now() / 1000);
-  const targetWindowStart = nowSec - cacheWindowDays() * 86400;
+  const wd = windowDays || 38;
+  const targetWindowStart = nowSec - wd * 86400;
 
   if (cache.txs.length === 0 && cache.fetchedAt === 0) {
     loadCacheFromStorage();
@@ -956,7 +974,7 @@ async function ensureCache(mode) {
   const cacheAgeMs = cache.fetchedAt ? Date.now() - cache.fetchedAt * 1000 : Infinity;
 
   if (mode !== 'force' && cache.txs.length > 0 && cacheCoversWindow) {
-    return { source: 'memory', fetched: 0, cacheAgeMs };
+    return { source: 'memory', fetched: 0, cacheAgeMs, windowDays: wd };
   }
 
   let fetchSince;
@@ -970,7 +988,7 @@ async function ensureCache(mode) {
     isFullRefetch = false;
   }
 
-  if (!cache.schema || !cache.schema.txFields) {
+  if (!cache.schema || !cache.schema.assetPriceFields) {
     cache.schema = await introspect();
   }
   if (!cache.priceIndex || mode === 'force') {
@@ -983,7 +1001,7 @@ async function ensureCache(mode) {
   cache.fetchedAt = nowSec;
   saveCacheToStorage();
 
-  return { source: isFullRefetch ? 'full-fetch' : 'incremental', fetched: newTxs.length, cacheAgeMs: 0 };
+  return { source: isFullRefetch ? 'full-fetch' : 'incremental', fetched: newTxs.length, cacheAgeMs: 0, windowDays: wd };
 }
 
 function isPtType(t) { return String(t || '').toUpperCase() === 'PT'; }
@@ -1563,8 +1581,8 @@ async function load(refreshMode) {
   }
 
   try {
-    const cacheInfo = await ensureCache(refreshMode || 'use-cache');
-    if (!cache.schema || !cache.schema.txFields) {
+    const cacheInfo = await ensureCache(refreshMode || 'use-cache', days);
+    if (!cache.schema || !cache.schema.assetPriceFields) {
       cache.schema = await introspect();
     }
     const schema = cache.schema || { assetTypes: [], txTypes: [], queryFields: [], futureFields: [], assetFields: [], txFields: [], accountFields: [] };
@@ -1670,7 +1688,7 @@ async function load(refreshMode) {
       : (cacheInfo.cacheAgeMs < 60000 ? Math.round(cacheInfo.cacheAgeMs/1000) + 's ago' : Math.round(cacheInfo.cacheAgeMs/60000) + 'm ago');
     const cacheLine = cacheInfo.source === 'memory'
       ? `<b>Cache hit:</b> ${cache.txs.length} tx in memory · last fetched ${ageText} · no API call`
-      : `<b>Cache ${cacheInfo.source}:</b> +${cacheInfo.fetched} new tx · ${cache.txs.length} total cached (last ${cacheWindowDays()}d)`;
+      : `<b>Cache ${cacheInfo.source}:</b> +${cacheInfo.fetched} new tx · ${cache.txs.length} total cached (last ${cacheInfo.windowDays || days}d)`;
 
     const tzLabel = (() => {
       try {
@@ -1709,15 +1727,11 @@ async function load(refreshMode) {
       const byTypePriced = new Map();
       for (const a of priced) byTypePriced.set(a.type, (byTypePriced.get(a.type) || 0) + 1);
       const sample = priced.slice(0, 6).map(a => `${escapeHtml(a.symbol || '?')}=$${parseFloat(a.price).toFixed(4)}`).join(' · ');
-      parts.push(`<b>Price index:</b> ${all.length} assets · ${priced.length} with asset.price · ${undPriced.length} with underlying.price${byTypePriced.size ? ' · by type: ' + fmtMap(byTypePriced) : ''}`);
+      parts.push(`<b>Price index:</b> ${all.length} assets · ${priced.length} priced · ${cache.priceIndex.priceEntities || 0} from AssetPrice entity${byTypePriced.size ? ' · by type: ' + fmtMap(byTypePriced) : ''}`);
       if (sample) parts.push(`<b>Sample priced assets:</b> ${sample}`);
-      if (priced.length === 0 && undPriced.length === 0) {
-        if (schema.futureFields?.length) parts.push(`<b>Future entity fields:</b> ${schema.futureFields.map(escapeHtml).join(', ')}`);
-        if (schema.assetFields?.length) parts.push(`<b>Asset entity fields:</b> ${schema.assetFields.map(escapeHtml).join(', ')}`);
-        if (schema.queryFields?.length) {
-          const priceRelated = schema.queryFields.filter(f => /price/i.test(f));
-          if (priceRelated.length) parts.push(`<b>Price-related root queries:</b> ${priceRelated.map(escapeHtml).join(', ')}`);
-        }
+      if (priced.length === 0) {
+        if (schema.assetPriceFields?.length) parts.push(`<b>AssetPrice entity fields:</b> ${schema.assetPriceFields.map(escapeHtml).join(', ')}`);
+        if (schema.chainlinkFields?.length) parts.push(`<b>ChainlinkAggregatorProxy fields:</b> ${schema.chainlinkFields.map(escapeHtml).join(', ')}`);
       }
     } else {
       parts.push(`<b>Price index:</b> not loaded`);
