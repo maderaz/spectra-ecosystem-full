@@ -741,16 +741,18 @@ const PRICE_QUERY = `
   query PriceIndex {
     assets(first: 1000) {
       id symbol type decimals
-      price { value }
       lastIBTRate
-      underlying { id symbol decimals price { value } }
-    }
-    assetPrices(first: 1000, orderBy: createdAtTimestamp, orderDirection: desc) {
-      value
-      asset { id }
+      chainlinkPriceFeed { id }
+      underlying { id symbol decimals chainlinkPriceFeed { id } }
     }
   }
 `;
+
+const FLARE_RPCS = [
+  'https://flare-api.flare.network/ext/C/rpc',
+  'https://rpc.ankr.com/flare',
+  'https://flare.rpc.thirdweb.com',
+];
 
 const INTROSPECT = `{
   AssetType: __type(name: "AssetType") { enumValues { name } }
@@ -922,39 +924,96 @@ function mergeTxs(existing, incoming, dropBefore) {
     .sort((a, b) => Number(a.createdAtTimestamp) - Number(b.createdAtTimestamp));
 }
 
+async function rpcBatch(calls) {
+  let lastErr = null;
+  for (const url of FLARE_RPCS) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(calls),
+      });
+      if (!res.ok) { lastErr = new Error('HTTP ' + res.status); continue; }
+      const arr = await res.json();
+      if (Array.isArray(arr)) return arr;
+      lastErr = new Error('non-array RPC response');
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('all RPC endpoints failed');
+}
+
+async function fetchChainlinkPrices(feedAddrs) {
+  if (!feedAddrs.length) return {};
+  const calls = [];
+  feedAddrs.forEach((addr, i) => {
+    calls.push({ jsonrpc: '2.0', id: 'p' + i, method: 'eth_call', params: [{ to: addr, data: '0xfeaf968c' }, 'latest'] }); // latestRoundData()
+    calls.push({ jsonrpc: '2.0', id: 'd' + i, method: 'eth_call', params: [{ to: addr, data: '0x313ce567' }, 'latest'] }); // decimals()
+  });
+  const arr = await rpcBatch(calls);
+  const byId = {};
+  for (const r of arr) byId[r.id] = r.result;
+
+  const TWO256 = 1n << 256n, TWO255 = 1n << 255n;
+  const out = {};
+  feedAddrs.forEach((addr, i) => {
+    const rd = byId['p' + i];
+    const dd = byId['d' + i];
+    if (!rd || rd === '0x' || rd.length < 2 + 128) return;
+    const hex = rd.slice(2);
+    let answer = BigInt('0x' + hex.slice(64, 128)); // 2nd 32-byte word
+    if (answer >= TWO255) answer -= TWO256;
+    if (answer <= 0n) return;
+    const decimals = (dd && dd !== '0x') ? Number(BigInt(dd)) : 8;
+    const price = Number(answer) / Math.pow(10, decimals);
+    if (isFinite(price) && price > 0) out[addr.toLowerCase()] = price;
+  });
+  return out;
+}
+
 async function fetchPriceIndex() {
   try {
     const d = await gql(PRICE_QUERY, {});
     const map = {};
+    const feedSet = new Set();
     for (const a of (d.assets || [])) {
       const id = String(a.id || '').toLowerCase();
       if (!id) continue;
+      const feedId = String(a.chainlinkPriceFeed?.id || '').toLowerCase();
+      const uFeedId = String(a.underlying?.chainlinkPriceFeed?.id || '').toLowerCase();
+      if (feedId) feedSet.add(feedId);
+      if (uFeedId) feedSet.add(uFeedId);
       map[id] = {
         id,
         symbol: a.symbol || '',
         type: a.type || '',
         decimals: a.decimals ?? 18,
-        price: a.price?.value || null,
         ibtRate: a.lastIBTRate || null,
+        feedId,
         underlyingId: String(a.underlying?.id || '').toLowerCase(),
         underlyingSymbol: a.underlying?.symbol || '',
         underlyingDecimals: a.underlying?.decimals ?? null,
-        underlyingPrice: a.underlying?.price?.value || null,
+        underlyingFeedId: uFeedId,
+        usd: null,
+        underlyingUsd: null,
       };
     }
-    // Overlay latest AssetPrice entity values (most recent first → first seen wins).
-    const seen = new Set();
-    let priceEntities = 0;
-    for (const p of (d.assetPrices || [])) {
-      const id = String(p.asset?.id || '').toLowerCase();
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      if (p.value == null) continue;
-      priceEntities++;
-      if (map[id]) { if (!map[id].price) map[id].price = p.value; }
-      else map[id] = { id, symbol: '', type: '', decimals: 18, price: p.value, ibtRate: null, underlyingId: '', underlyingSymbol: '', underlyingDecimals: null, underlyingPrice: null };
+    const feedAddrs = [...feedSet].filter(Boolean);
+    let feedPrices = {};
+    try { feedPrices = await fetchChainlinkPrices(feedAddrs); }
+    catch (e) { console.warn('Chainlink RPC failed:', e); }
+
+    for (const id in map) {
+      const m = map[id];
+      if (m.feedId && feedPrices[m.feedId]) m.usd = feedPrices[m.feedId];
+      if (m.underlyingFeedId && feedPrices[m.underlyingFeedId]) m.underlyingUsd = feedPrices[m.underlyingFeedId];
     }
-    return { map, fetchedAt: Math.floor(Date.now() / 1000), priceEntities };
+    return {
+      map,
+      fetchedAt: Math.floor(Date.now() / 1000),
+      feedCount: feedAddrs.length,
+      feedResolved: Object.keys(feedPrices).length,
+      feedPrices,
+    };
   } catch (e) {
     console.warn('Price index fetch failed:', e);
     return null;
@@ -1103,38 +1162,22 @@ function classifyGroup(events) {
   return 'OTHER';
 }
 
-function priceFromIndex(assetId) {
+// Resolve the underlying-denominated USD price for valueUnderlying (which is in underlying units).
+function findUnderlying(events) {
   const idx = cache.priceIndex?.map;
   if (!idx) return null;
-  const id = String(assetId || '').toLowerCase();
-  const info = idx[id];
-  if (!info) return null;
-  if (info.price) return { decimals: info.decimals, price: parseFloat(info.price), symbol: info.symbol };
-  if (info.underlyingPrice && info.underlyingDecimals != null) {
-    return { decimals: info.underlyingDecimals, price: parseFloat(info.underlyingPrice), symbol: info.underlyingSymbol };
-  }
-  if (info.underlyingId) {
-    const u = idx[info.underlyingId];
-    if (u && u.price) return { decimals: u.decimals, price: parseFloat(u.price), symbol: u.symbol };
-  }
-  return null;
-}
-
-function findUnderlying(events) {
-  // 1. Inline underlying.price from event assets (subgraph nested path)
   for (const ev of events) {
     for (const a of [...(ev.amountsIn||[]), ...(ev.amountsOut||[])]) {
-      const u = a.asset?.underlying;
-      if (u && u.price && u.price.value) {
-        return { decimals: u.decimals ?? 18, price: parseFloat(u.price.value), symbol: u.symbol || '' };
+      const m = idx[String(a.asset?.id || '').toLowerCase()];
+      if (!m) continue;
+      // The asset's underlying carries valueUnderlying's denomination + USD feed.
+      if (m.underlyingUsd && m.underlyingDecimals != null) {
+        return { decimals: m.underlyingDecimals, price: m.underlyingUsd, symbol: m.underlyingSymbol };
       }
-    }
-  }
-  // 2. Lookup in cached price index by each asset.id (covers asset.price + chained underlying.price)
-  for (const ev of events) {
-    for (const a of [...(ev.amountsIn||[]), ...(ev.amountsOut||[])]) {
-      const p = priceFromIndex(a.asset?.id);
-      if (p) return p;
+      // If the asset itself is the underlying (has its own USD feed).
+      if (m.usd) {
+        return { decimals: m.decimals, price: m.usd, symbol: m.symbol };
+      }
     }
   }
   return null;
@@ -1585,6 +1628,10 @@ async function load(refreshMode) {
     if (!cache.schema || !cache.schema.assetPriceFields) {
       cache.schema = await introspect();
     }
+    if (!cache.priceIndex || !cache.priceIndex.feedPrices) {
+      cache.priceIndex = await fetchPriceIndex();
+      saveCacheToStorage();
+    }
     const schema = cache.schema || { assetTypes: [], txTypes: [], queryFields: [], futureFields: [], assetFields: [], txFields: [], accountFields: [] };
 
     let token = document.getElementById('token-select').value;
@@ -1721,17 +1768,22 @@ async function load(refreshMode) {
     }
     if (cache.priceIndex) {
       const idx = cache.priceIndex.map || {};
-      const all = Object.values(idx);
-      const priced = all.filter(a => a.price);
-      const undPriced = all.filter(a => a.underlyingPrice);
-      const byTypePriced = new Map();
-      for (const a of priced) byTypePriced.set(a.type, (byTypePriced.get(a.type) || 0) + 1);
-      const sample = priced.slice(0, 6).map(a => `${escapeHtml(a.symbol || '?')}=$${parseFloat(a.price).toFixed(4)}`).join(' · ');
-      parts.push(`<b>Price index:</b> ${all.length} assets · ${priced.length} priced · ${cache.priceIndex.priceEntities || 0} from AssetPrice entity${byTypePriced.size ? ' · by type: ' + fmtMap(byTypePriced) : ''}`);
-      if (sample) parts.push(`<b>Sample priced assets:</b> ${sample}`);
-      if (priced.length === 0) {
-        if (schema.assetPriceFields?.length) parts.push(`<b>AssetPrice entity fields:</b> ${schema.assetPriceFields.map(escapeHtml).join(', ')}`);
-        if (schema.chainlinkFields?.length) parts.push(`<b>ChainlinkAggregatorProxy fields:</b> ${schema.chainlinkFields.map(escapeHtml).join(', ')}`);
+      const assetList = Object.values(idx);
+      const priced = assetList.filter(a => a.usd || a.underlyingUsd);
+      const sampleArr = [];
+      const seenSym = new Set();
+      for (const a of priced) {
+        const p = a.usd || a.underlyingUsd;
+        const sym = a.usd ? a.symbol : a.underlyingSymbol;
+        if (seenSym.has(sym)) continue;
+        seenSym.add(sym);
+        sampleArr.push(`${escapeHtml(sym || '?')}=$${p.toLocaleString('en-US',{maximumFractionDigits:4})}`);
+        if (sampleArr.length >= 6) break;
+      }
+      parts.push(`<b>Price index:</b> ${assetList.length} assets · ${priced.length} priced · Chainlink feeds ${cache.priceIndex.feedResolved || 0}/${cache.priceIndex.feedCount || 0} resolved`);
+      if (sampleArr.length) parts.push(`<b>Sample prices:</b> ${sampleArr.join(' · ')}`);
+      if (priced.length === 0 && schema.chainlinkFields?.length) {
+        parts.push(`<b>ChainlinkAggregatorProxy fields:</b> ${schema.chainlinkFields.map(escapeHtml).join(', ')}`);
       }
     } else {
       parts.push(`<b>Price index:</b> not loaded`);
