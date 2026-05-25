@@ -757,6 +757,8 @@ const INTROSPECT = `{
   Query: __type(name: "Query") { fields { name } }
   Future: __type(name: "Future") { fields { name type { name kind ofType { name kind } } } }
   Asset:  __type(name: "Asset")  { fields { name type { name kind ofType { name kind } } } }
+  Transaction: __type(name: "Transaction") { fields { name type { name kind ofType { name kind } } } }
+  Account: __type(name: "Account") { fields { name type { name kind ofType { name kind } } } }
 }`;
 
 function fmtUsd(n) {
@@ -795,9 +797,11 @@ async function introspect() {
       queryFields: (d.Query?.fields || []).map(f => f.name),
       futureFields: (d.Future?.fields || []).map(f => f.name),
       assetFields: (d.Asset?.fields || []).map(f => f.name),
+      txFields: (d.Transaction?.fields || []).map(f => f.name),
+      accountFields: (d.Account?.fields || []).map(f => f.name),
     };
   } catch (e) {
-    return { assetTypes: [], txTypes: [], queryFields: [], futureFields: [], assetFields: [], error: e.message };
+    return { assetTypes: [], txTypes: [], queryFields: [], futureFields: [], assetFields: [], txFields: [], accountFields: [], error: e.message };
   }
 }
 
@@ -966,7 +970,7 @@ async function ensureCache(mode) {
     isFullRefetch = false;
   }
 
-  if (!cache.schema) {
+  if (!cache.schema || !cache.schema.txFields) {
     cache.schema = await introspect();
   }
   if (!cache.priceIndex || mode === 'force') {
@@ -1560,7 +1564,10 @@ async function load(refreshMode) {
 
   try {
     const cacheInfo = await ensureCache(refreshMode || 'use-cache');
-    const schema = cache.schema || { assetTypes: [], txTypes: [], queryFields: [], futureFields: [], assetFields: [] };
+    if (!cache.schema || !cache.schema.txFields) {
+      cache.schema = await introspect();
+    }
+    const schema = cache.schema || { assetTypes: [], txTypes: [], queryFields: [], futureFields: [], assetFields: [], txFields: [], accountFields: [] };
 
     let token = document.getElementById('token-select').value;
     let detected = null;
@@ -1686,6 +1693,14 @@ async function load(refreshMode) {
     parts.push(cacheLine);
     parts.push(`<b>Window:</b> last ${days}d → ${all.length} subgraph tx in ${groups.size} on-chain tx`);
     parts.push(`<b>Classification of on-chain tx:</b> ${fmtMap(classCounts)}`);
+    const withFrom = all.filter(t => t.from).length;
+    parts.push(`<b>Sender (from) populated:</b> ${withFrom} / ${all.length} tx`);
+    if (withFrom === 0) {
+      const raw = all.slice(0, 2).map(t => `id=${escapeHtml((t.id||'').slice(0,24))}… · address=${escapeHtml((t.address||'(empty)').slice(0,24))} · from=${escapeHtml(t.from||'(empty)')}`).join('<br>  ');
+      if (raw) parts.push(`<b>Raw tx sample:</b><br>  ${raw}`);
+      if (schema.txFields?.length) parts.push(`<b>Transaction entity fields:</b> ${schema.txFields.map(escapeHtml).join(', ')}`);
+      if (schema.accountFields?.length) parts.push(`<b>Account entity fields:</b> ${schema.accountFields.map(escapeHtml).join(', ')}`);
+    }
     if (cache.priceIndex) {
       const idx = cache.priceIndex.map || {};
       const all = Object.values(idx);
