@@ -111,6 +111,16 @@
   .type-chip.add-lp    { color: #b890ff; border-color: rgba(184,144,255,0.35); background: rgba(184,144,255,0.06); }
   .type-chip.remove-lp { color: #ffcf66; border-color: rgba(255,207,102,0.35); background: rgba(255,207,102,0.06); }
   .type-chip.other     { color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.15); background: rgba(255,255,255,0.03); }
+  .net-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #7fb0ff;
+    border: 1px solid rgba(127,176,255,0.3);
+    background: rgba(127,176,255,0.06);
+  }
   header { margin-bottom: 32px; }
   .header-row {
     display: flex;
@@ -506,8 +516,12 @@
         <div class="subtitle" id="subtitle">Combined buy + sell volume over the last 38 days</div>
       </div>
       <div class="controls">
+        <select class="token-select" id="network-select" title="Select network (chain) to analyze">
+          <option value="all" selected>All chains</option>
+        </select>
         <select class="token-select" id="token-select" title="Select token type to analyze">
-          <option value="YT" selected>YT (Yield Token)</option>
+          <option value="ALL" selected>All (LP+YT+PT)</option>
+          <option value="YT">YT (Yield Token)</option>
           <option value="PT">PT (Principal Token)</option>
           <option value="LP">LP (Liquidity)</option>
         </select>
@@ -674,6 +688,7 @@
         <thead>
           <tr>
             <th>Transaction</th>
+            <th>Network</th>
             <th>Type</th>
             <th class="num">Notional Value</th>
             <th>Time</th>
@@ -691,15 +706,57 @@
 const API_URL = 'https://api.goldsky.com/api/public/project_cm55feuq3euos01xjb3w504ls/subgraphs/spectra-flare/prod/gn';
 const PAGE_SIZE = 1000;
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const CACHE_KEY = 'spectra:yt:cache:v5';
+
+// Multi-chain config. Each Spectra deployment = one subgraph endpoint + RPCs for
+// reading its Chainlink price feeds. Non-Flare endpoints follow the same Goldsky
+// project/slug pattern; any that don't respond are skipped gracefully at runtime.
+// Endpoints confirmed against DefiLlama's spectra-v2 adapter (same Goldsky project).
+// RPCs are public nodes used only to read each chain's Chainlink price feeds; a
+// chain whose RPC blocks CORS still loads tx data, just without USD pricing.
+const GOLDSKY_PROJECT = 'https://api.goldsky.com/api/public/project_cm55feuq3euos01xjb3w504ls/subgraphs';
+const sg = (slug) => GOLDSKY_PROJECT + '/spectra-' + slug + '/prod/gn';
+const NETWORKS = [
+  { key: 'flare', label: 'Flare', endpoint: sg('flare'),
+    rpcs: ['https://flare-api.flare.network/ext/C/rpc', 'https://rpc.ankr.com/flare', 'https://flare.rpc.thirdweb.com'] },
+  { key: 'ethereum', label: 'Ethereum', endpoint: sg('mainnet'),
+    rpcs: ['https://eth.llamarpc.com', 'https://ethereum-rpc.publicnode.com', 'https://rpc.ankr.com/eth'] },
+  { key: 'arbitrum', label: 'Arbitrum', endpoint: sg('arbitrum'),
+    rpcs: ['https://arb1.arbitrum.io/rpc', 'https://arbitrum-one-rpc.publicnode.com', 'https://rpc.ankr.com/arbitrum'] },
+  { key: 'optimism', label: 'Optimism', endpoint: sg('optimism'),
+    rpcs: ['https://mainnet.optimism.io', 'https://optimism-rpc.publicnode.com', 'https://rpc.ankr.com/optimism'] },
+  { key: 'base', label: 'Base', endpoint: sg('base'),
+    rpcs: ['https://mainnet.base.org', 'https://base-rpc.publicnode.com', 'https://rpc.ankr.com/base'] },
+  { key: 'bsc', label: 'BNB Chain', endpoint: sg('bsc'),
+    rpcs: ['https://bsc-dataseed.bnbchain.org', 'https://bsc-rpc.publicnode.com', 'https://rpc.ankr.com/bsc'] },
+  { key: 'avalanche', label: 'Avalanche', endpoint: sg('avalanche'),
+    rpcs: ['https://api.avax.network/ext/bc/C/rpc', 'https://avalanche-c-chain-rpc.publicnode.com', 'https://rpc.ankr.com/avalanche'] },
+  { key: 'sonic', label: 'Sonic', endpoint: sg('sonic'),
+    rpcs: ['https://rpc.soniclabs.com', 'https://sonic-rpc.publicnode.com'] },
+  { key: 'hemi', label: 'Hemi', endpoint: sg('hemi'),
+    rpcs: ['https://rpc.hemi.network/rpc'] },
+  { key: 'hyperevm', label: 'HyperEVM', endpoint: sg('hyperevm'),
+    rpcs: ['https://rpc.hyperliquid.xyz/evm', 'https://rpc.hyperliquid.xyz/evm'] },
+  { key: 'katana', label: 'Katana', endpoint: sg('katana'),
+    rpcs: ['https://rpc.katana.network'] },
+  { key: 'monad', label: 'Monad', endpoint: sg('monad'),
+    rpcs: ['https://testnet-rpc.monad.xyz'] },
+];
+const netByKey = (k) => NETWORKS.find(n => n.key === k) || NETWORKS[0];
+
 const TOKEN_PREF_KEY = 'spectra:yt:token';
 const ADDR_PREF_KEY = 'spectra:yt:addr';
+const NET_PREF_KEY = 'spectra:yt:network';
+const SCHEMA_KEY = 'spectra:schema:v1';
+const netStoreKey = (k) => 'spectra:net:' + k + ':v6';
 
 const ACTIONS = {
-  YT: { buy: 'BUY_YT',         sell: 'SELL_YT',           buyLabel: 'Buy',    sellLabel: 'Sell',   title: 'YT Token Activity' },
-  PT: { buy: 'BUY_PT',         sell: 'SELL_PT',           buyLabel: 'Buy',    sellLabel: 'Sell',   title: 'PT Token Activity' },
-  LP: { buy: 'ADD_LIQUIDITY',  sell: 'REMOVE_LIQUIDITY',  buyLabel: 'Add',    sellLabel: 'Remove', title: 'LP Activity' },
+  ALL: { buys: ['BUY_YT','BUY_PT','ADD_LIQUIDITY'], sells: ['SELL_YT','SELL_PT','REMOVE_LIQUIDITY'], buyLabel: 'Inflow',  sellLabel: 'Outflow', title: 'All Activity (LP+YT+PT)' },
+  YT:  { buys: ['BUY_YT'],          sells: ['SELL_YT'],           buyLabel: 'Buy', sellLabel: 'Sell',   title: 'YT Token Activity' },
+  PT:  { buys: ['BUY_PT'],          sells: ['SELL_PT'],           buyLabel: 'Buy', sellLabel: 'Sell',   title: 'PT Token Activity' },
+  LP:  { buys: ['ADD_LIQUIDITY'],   sells: ['REMOVE_LIQUIDITY'],  buyLabel: 'Add', sellLabel: 'Remove', title: 'LP Activity' },
 };
+const isBuy = (A, c) => A.buys.includes(c);
+const isSell = (A, c) => A.sells.includes(c);
 
 function daysSinceJan1() {
   const now = new Date();
@@ -707,7 +764,13 @@ function daysSinceJan1() {
   return Math.ceil((now - jan1) / 86400000);
 }
 
-let cache = { txs: [], fetchedAt: 0, windowStartTs: 0, schema: null, priceIndex: null };
+// Per-network data store: key -> { txs, fetchedAt, windowStartTs, priceIndex, loaded, available, error }.
+let netCache = {};
+let schemaCache = null;
+function getNet(k) {
+  if (!netCache[k]) netCache[k] = { txs: [], fetchedAt: 0, windowStartTs: 0, priceIndex: null, loaded: false, available: null, error: null };
+  return netCache[k];
+}
 
 const QUERY = `
   query AllTx($since: BigInt!, $cursor: BigInt!, $first: Int!) {
@@ -748,12 +811,6 @@ const PRICE_QUERY = `
   }
 `;
 
-const FLARE_RPCS = [
-  'https://flare-api.flare.network/ext/C/rpc',
-  'https://rpc.ankr.com/flare',
-  'https://flare.rpc.thirdweb.com',
-];
-
 const INTROSPECT = `{
   AssetType: __type(name: "AssetType") { enumValues { name } }
   TxType: __type(name: "TransactionType") { enumValues { name } }
@@ -781,8 +838,8 @@ function isoDay(d) {
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
 
-async function gql(query, variables) {
-  const res = await fetch(API_URL, {
+async function gql(endpoint, query, variables) {
+  const res = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, variables })
@@ -795,7 +852,7 @@ async function gql(query, variables) {
 
 async function introspect() {
   try {
-    const d = await gql(INTROSPECT, {});
+    const d = await gql(API_URL, INTROSPECT, {});
     return {
       assetTypes: (d.AssetType?.enumValues || []).map(v => v.name),
       txTypes: (d.TxType?.enumValues || []).map(v => v.name),
@@ -812,11 +869,11 @@ async function introspect() {
   }
 }
 
-async function fetchAllTransactions(sinceTs) {
+async function fetchAllTransactions(endpoint, sinceTs) {
   let all = [];
   let cursor = '0';
   while (true) {
-    const data = await gql(QUERY, { since: String(sinceTs), cursor, first: PAGE_SIZE });
+    const data = await gql(endpoint, QUERY, { since: String(sinceTs), cursor, first: PAGE_SIZE });
     const batch = data.transactions;
     if (batch.length === 0) break;
     all = all.concat(batch);
@@ -882,38 +939,56 @@ function decompressTx(c) {
   };
 }
 
-function loadCacheFromStorage() {
+function loadNetFromStorage(key) {
+  const nc = getNet(key);
+  if (nc.loaded) return true;
   try {
-    const raw = localStorage.getItem(CACHE_KEY);
-    if (!raw) return false;
+    const raw = localStorage.getItem(netStoreKey(key));
+    if (!raw) { nc.loaded = true; return false; }
     const parsed = JSON.parse(raw);
-    if (!parsed || !Array.isArray(parsed.t)) return false;
-    cache.txs = parsed.t.map(decompressTx);
-    cache.fetchedAt = parsed.f || 0;
-    cache.windowStartTs = parsed.s || 0;
-    cache.schema = parsed.sc || null;
-    cache.priceIndex = parsed.pi || null;
+    if (!parsed || !Array.isArray(parsed.t)) { nc.loaded = true; return false; }
+    nc.txs = parsed.t.map(decompressTx);
+    for (const t of nc.txs) t._net = key;
+    nc.fetchedAt = parsed.f || 0;
+    nc.windowStartTs = parsed.s || 0;
+    nc.priceIndex = parsed.pi || null;
+    nc.loaded = true;
     return true;
   } catch (e) {
-    console.warn('Cache load failed:', e);
+    console.warn('Net cache load failed (' + key + '):', e);
+    nc.loaded = true;
     return false;
   }
 }
 
-function saveCacheToStorage() {
+function saveNetToStorage(key) {
+  const nc = getNet(key);
   try {
     const payload = {
-      v: 1,
-      f: cache.fetchedAt,
-      s: cache.windowStartTs,
-      sc: cache.schema,
-      pi: cache.priceIndex,
-      t: cache.txs.map(compressTx),
+      v: 6,
+      f: nc.fetchedAt,
+      s: nc.windowStartTs,
+      pi: nc.priceIndex,
+      t: nc.txs.map(compressTx),
     };
-    localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
+    localStorage.setItem(netStoreKey(key), JSON.stringify(payload));
   } catch (e) {
-    console.warn('Cache save failed (likely quota):', e);
+    console.warn('Net cache save failed (' + key + ', likely quota):', e);
   }
+}
+
+function loadSchemaFromStorage() {
+  if (schemaCache) return true;
+  try {
+    const raw = localStorage.getItem(SCHEMA_KEY);
+    if (!raw) return false;
+    schemaCache = JSON.parse(raw);
+    return !!schemaCache;
+  } catch (e) { return false; }
+}
+
+function saveSchemaToStorage() {
+  try { localStorage.setItem(SCHEMA_KEY, JSON.stringify(schemaCache)); } catch (e) {}
 }
 
 function mergeTxs(existing, incoming, dropBefore) {
@@ -924,9 +999,9 @@ function mergeTxs(existing, incoming, dropBefore) {
     .sort((a, b) => Number(a.createdAtTimestamp) - Number(b.createdAtTimestamp));
 }
 
-async function rpcBatch(calls) {
+async function rpcBatch(calls, rpcs) {
   let lastErr = null;
-  for (const url of FLARE_RPCS) {
+  for (const url of (rpcs || [])) {
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -942,14 +1017,14 @@ async function rpcBatch(calls) {
   throw lastErr || new Error('all RPC endpoints failed');
 }
 
-async function fetchChainlinkPrices(feedAddrs) {
-  if (!feedAddrs.length) return {};
+async function fetchChainlinkPrices(feedAddrs, rpcs) {
+  if (!feedAddrs.length || !rpcs || !rpcs.length) return {};
   const calls = [];
   feedAddrs.forEach((addr, i) => {
     calls.push({ jsonrpc: '2.0', id: 'p' + i, method: 'eth_call', params: [{ to: addr, data: '0xfeaf968c' }, 'latest'] }); // latestRoundData()
     calls.push({ jsonrpc: '2.0', id: 'd' + i, method: 'eth_call', params: [{ to: addr, data: '0x313ce567' }, 'latest'] }); // decimals()
   });
-  const arr = await rpcBatch(calls);
+  const arr = await rpcBatch(calls, rpcs);
   const byId = {};
   for (const r of arr) byId[r.id] = r.result;
 
@@ -970,9 +1045,9 @@ async function fetchChainlinkPrices(feedAddrs) {
   return out;
 }
 
-async function fetchPriceIndex() {
+async function fetchPriceIndex(endpoint, rpcs) {
   try {
-    const d = await gql(PRICE_QUERY, {});
+    const d = await gql(endpoint, PRICE_QUERY, {});
     const map = {};
     const feedSet = new Set();
     for (const a of (d.assets || [])) {
@@ -999,7 +1074,7 @@ async function fetchPriceIndex() {
     }
     const feedAddrs = [...feedSet].filter(Boolean);
     let feedPrices = {};
-    try { feedPrices = await fetchChainlinkPrices(feedAddrs); }
+    try { feedPrices = await fetchChainlinkPrices(feedAddrs, rpcs); }
     catch (e) { console.warn('Chainlink RPC failed:', e); }
 
     for (const id in map) {
@@ -1020,47 +1095,60 @@ async function fetchPriceIndex() {
   }
 }
 
-async function ensureCache(mode, windowDays) {
+// Fetch/refresh a single network into its cache. Never throws: on failure it
+// records the error on the net entry and returns an info object with ok:false.
+async function ensureNetwork(net, mode, windowDays) {
+  const nc = getNet(net.key);
   const nowSec = Math.floor(Date.now() / 1000);
   const wd = windowDays || 38;
   const targetWindowStart = nowSec - wd * 86400;
 
-  if (cache.txs.length === 0 && cache.fetchedAt === 0) {
-    loadCacheFromStorage();
+  if (!nc.loaded) loadNetFromStorage(net.key);
+
+  // Don't re-attempt a known-dead endpoint on every cache-mode load; only a
+  // forced refresh retries it.
+  if (mode !== 'force' && nc.available === false && nc.txs.length === 0) {
+    return { ok: false, key: net.key, source: 'error', fetched: 0, cacheAgeMs: Infinity, windowDays: wd, error: nc.error, stale: false };
   }
 
-  const cacheCoversWindow = cache.windowStartTs > 0 && cache.windowStartTs <= targetWindowStart + 86400;
-  const cacheAgeMs = cache.fetchedAt ? Date.now() - cache.fetchedAt * 1000 : Infinity;
+  const cacheCoversWindow = nc.windowStartTs > 0 && nc.windowStartTs <= targetWindowStart + 86400;
+  const cacheAgeMs = nc.fetchedAt ? Date.now() - nc.fetchedAt * 1000 : Infinity;
 
-  if (mode !== 'force' && cache.txs.length > 0 && cacheCoversWindow) {
-    return { source: 'memory', fetched: 0, cacheAgeMs, windowDays: wd };
+  if (mode !== 'force' && nc.txs.length > 0 && cacheCoversWindow) {
+    nc.available = true; nc.error = null;
+    return { ok: true, key: net.key, source: 'memory', fetched: 0, cacheAgeMs, windowDays: wd };
   }
 
-  let fetchSince;
-  let isFullRefetch;
-  if (cache.txs.length === 0 || !cacheCoversWindow) {
+  let fetchSince, isFullRefetch;
+  if (nc.txs.length === 0 || !cacheCoversWindow) {
     fetchSince = targetWindowStart;
     isFullRefetch = true;
   } else {
-    const latestTs = cache.txs.reduce((m, t) => Math.max(m, Number(t.createdAtTimestamp)), 0);
+    const latestTs = nc.txs.reduce((m, t) => Math.max(m, Number(t.createdAtTimestamp)), 0);
     fetchSince = Math.max(latestTs, targetWindowStart);
     isFullRefetch = false;
   }
 
-  if (!cache.schema || !cache.schema.assetPriceFields) {
-    cache.schema = await introspect();
+  try {
+    if (!nc.priceIndex || !nc.priceIndex.feedPrices || mode === 'force') {
+      nc.priceIndex = await fetchPriceIndex(net.endpoint, net.rpcs);
+    }
+    const newTxs = await fetchAllTransactions(net.endpoint, fetchSince);
+    for (const t of newTxs) t._net = net.key;
+    nc.txs = mergeTxs(nc.txs, newTxs, targetWindowStart);
+    for (const t of nc.txs) t._net = net.key;
+    nc.windowStartTs = targetWindowStart;
+    nc.fetchedAt = nowSec;
+    nc.available = true; nc.error = null;
+    saveNetToStorage(net.key);
+    return { ok: true, key: net.key, source: isFullRefetch ? 'full-fetch' : 'incremental', fetched: newTxs.length, cacheAgeMs: 0, windowDays: wd };
+  } catch (e) {
+    nc.available = false;
+    nc.error = (e && e.message) ? e.message : String(e);
+    console.warn('Network fetch failed (' + net.key + '):', e);
+    // If we still have cached data for this net, keep using it as a degraded fallback.
+    return { ok: nc.txs.length > 0, key: net.key, source: 'error', fetched: 0, cacheAgeMs, windowDays: wd, error: nc.error, stale: nc.txs.length > 0 };
   }
-  if (!cache.priceIndex || mode === 'force') {
-    cache.priceIndex = await fetchPriceIndex();
-  }
-
-  const newTxs = await fetchAllTransactions(fetchSince);
-  cache.txs = mergeTxs(cache.txs, newTxs, targetWindowStart);
-  cache.windowStartTs = targetWindowStart;
-  cache.fetchedAt = nowSec;
-  saveCacheToStorage();
-
-  return { source: isFullRefetch ? 'full-fetch' : 'incremental', fetched: newTxs.length, cacheAgeMs: 0, windowDays: wd };
 }
 
 function isPtType(t) { return String(t || '').toUpperCase() === 'PT'; }
@@ -1114,12 +1202,17 @@ function txHash(tx) {
   return (dash > 0 ? id.slice(0, dash) : id).toLowerCase();
 }
 
+// Group subgraph rows into on-chain transactions, scoped per network so hashes
+// from different chains never collide. Returns a Map of compositeKey -> {hash, net, events}.
 function groupByHash(txs) {
   const m = new Map();
   for (const tx of txs) {
+    const net = tx._net || 'flare';
     const h = txHash(tx);
-    if (!m.has(h)) m.set(h, []);
-    m.get(h).push(tx);
+    const key = net + '|' + h;
+    let g = m.get(key);
+    if (!g) { g = { hash: h, net, events: [] }; m.set(key, g); }
+    g.events.push(tx);
   }
   return m;
 }
@@ -1163,8 +1256,7 @@ function classifyGroup(events) {
 }
 
 // Resolve the underlying-denominated USD price for valueUnderlying (which is in underlying units).
-function findUnderlying(events) {
-  const idx = cache.priceIndex?.map;
+function findUnderlying(events, idx) {
   if (!idx) return null;
   for (const ev of events) {
     for (const a of [...(ev.amountsIn||[]), ...(ev.amountsOut||[])]) {
@@ -1183,8 +1275,8 @@ function findUnderlying(events) {
   return null;
 }
 
-function groupUsdValue(events, classification) {
-  const u = findUnderlying(events);
+function groupUsdValue(events, classification, idx) {
+  const u = findUnderlying(events, idx);
   if (!u || !u.price) return 0;
 
   const dep = events.find(e => e.type === 'FUTURE_VAULT_DEPOSIT');
@@ -1418,6 +1510,13 @@ function renderActivityTable(groups) {
     txTd.appendChild(txEl);
     tr.appendChild(txTd);
 
+    const netTd = document.createElement('td');
+    const netChip = document.createElement('span');
+    netChip.className = 'net-chip';
+    netChip.textContent = netByKey(g.net).label;
+    netTd.appendChild(netChip);
+    tr.appendChild(netTd);
+
     const typeTd = document.createElement('td');
     const chip = document.createElement('span');
     chip.className = 'type-chip ' + (CLASS_CHIP_CLASS[g.cls] || 'other');
@@ -1615,31 +1714,49 @@ async function load(refreshMode) {
   const days = isYtd ? daysSinceJan1() : parseInt(sel, 10);
   document.getElementById('refresh').disabled = true;
 
-  const hasCache = cache.txs.length > 0 || loadCacheFromStorage();
-  const willHitNetwork = refreshMode === 'force' || !hasCache;
+  const selectedNet = document.getElementById('network-select').value || 'all';
+  const netsToLoad = selectedNet === 'all' ? NETWORKS : [netByKey(selectedNet)];
+
+  // Determine whether we'll hit the network (any selected net lacks usable cache).
+  const someCached = netsToLoad.some(n => { const nc = getNet(n.key); return nc.txs.length > 0 || (!nc.loaded && loadNetFromStorage(n.key) && nc.txs.length > 0); });
+  const willHitNetwork = refreshMode === 'force' || !someCached;
   if (willHitNetwork) {
     document.getElementById('content').classList.add('hidden');
     setDiag(null);
-    setStatus('loading', refreshMode === 'force' ? 'Refreshing from Spectra subgraph…' : 'Fetching transactions from Spectra subgraph…');
+    const scope = selectedNet === 'all' ? 'all chains' : netByKey(selectedNet).label;
+    setStatus('loading', (refreshMode === 'force' ? 'Refreshing' : 'Fetching') + ` Spectra data (${scope})…`);
   }
 
   try {
-    const cacheInfo = await ensureCache(refreshMode || 'use-cache', days);
-    if (!cache.schema || !cache.schema.assetPriceFields) {
-      cache.schema = await introspect();
+    if (!schemaCache || !schemaCache.assetPriceFields) {
+      if (!loadSchemaFromStorage() || !schemaCache.assetPriceFields) {
+        schemaCache = await introspect();
+        saveSchemaToStorage();
+      }
     }
-    if (!cache.priceIndex || !cache.priceIndex.feedPrices) {
-      cache.priceIndex = await fetchPriceIndex();
-      saveCacheToStorage();
+    const schema = schemaCache || { assetTypes: [], txTypes: [], queryFields: [], futureFields: [], assetFields: [], txFields: [], accountFields: [] };
+
+    // Fetch selected networks in parallel; ensureNetwork never throws, so one
+    // bad endpoint can't abort the others.
+    const netInfos = await Promise.all(
+      netsToLoad.map(net => ensureNetwork(net, refreshMode || 'use-cache', days))
+    );
+    const okNets = netsToLoad.filter(n => getNet(n.key).txs.length > 0);
+
+    const sinceTs = Math.floor(Date.now() / 1000) - days * 86400;
+    let all = [];
+    for (const net of okNets) {
+      const nc = getNet(net.key);
+      for (const t of nc.txs) if (Number(t.createdAtTimestamp) >= sinceTs) all.push(t);
     }
-    const schema = cache.schema || { assetTypes: [], txTypes: [], queryFields: [], futureFields: [], assetFields: [], txFields: [], accountFields: [] };
 
     let token = document.getElementById('token-select').value;
+    if (!ACTIONS[token]) token = 'YT';
     let detected = null;
     if (addr) {
-      const assetIdx = buildAssetIndex(cache.txs);
+      const assetIdx = buildAssetIndex(all);
       detected = detectAsset(addr, assetIdx);
-      if (detected) {
+      if (detected && token !== 'ALL') {
         const t = String(detected.type || '').toUpperCase();
         const auto = t === 'YT' || t === 'FYT' ? 'YT'
                    : t === 'PT' ? 'PT'
@@ -1656,39 +1773,38 @@ async function load(refreshMode) {
     const A = ACTIONS[token];
     updateLabelsForToken(token, days, isYtd, addr, detected);
 
-    const sinceTs = Math.floor(Date.now() / 1000) - days * 86400;
-    const all = cache.txs.filter(t => Number(t.createdAtTimestamp) >= sinceTs);
+    const priceMapFor = (netKey) => getNet(netKey).priceIndex?.map || null;
 
     const groups = groupByHash(all);
     const classByGroup = new Map();
     const classCounts = new Map();
-    for (const [hash, events] of groups) {
-      const c = classifyGroup(events);
-      classByGroup.set(hash, c);
+    for (const [key, g] of groups) {
+      const c = classifyGroup(g.events);
+      classByGroup.set(key, c);
       classCounts.set(c, (classCounts.get(c) || 0) + 1);
     }
 
     const buyGroups = [], sellGroups = [];
-    for (const [hash, events] of groups) {
-      const c = classByGroup.get(hash);
-      if (c !== A.buy && c !== A.sell) continue;
-      if (addr && !groupTouchesAddr(events, addr)) continue;
-      const usd = groupUsdValue(events, c);
-      const ts = Math.min(...events.map(e => Number(e.createdAtTimestamp)));
-      const g = { hash, events, usd, ts, cls: c };
-      (c === A.buy ? buyGroups : sellGroups).push(g);
+    for (const [key, g] of groups) {
+      const c = classByGroup.get(key);
+      if (!isBuy(A, c) && !isSell(A, c)) continue;
+      if (addr && !groupTouchesAddr(g.events, addr)) continue;
+      const usd = groupUsdValue(g.events, c, priceMapFor(g.net));
+      const ts = Math.min(...g.events.map(e => Number(e.createdAtTimestamp)));
+      const item = { hash: g.hash, net: g.net, events: g.events, usd, ts, cls: c };
+      (isBuy(A, c) ? buyGroups : sellGroups).push(item);
     }
     buyGroups.sort((a, b) => b.ts - a.ts);
     sellGroups.sort((a, b) => b.ts - a.ts);
     const allTokenGroups = [...buyGroups, ...sellGroups];
 
     const activityGroups = [];
-    for (const [hash, events] of groups) {
-      if (addr && !groupTouchesAddr(events, addr)) continue;
-      const c = classByGroup.get(hash);
-      const ts = Math.min(...events.map(e => Number(e.createdAtTimestamp)));
-      const usd = groupUsdValue(events, c);
-      activityGroups.push({ hash, events, ts, cls: c, usd });
+    for (const [key, g] of groups) {
+      if (addr && !groupTouchesAddr(g.events, addr)) continue;
+      const c = classByGroup.get(key);
+      const ts = Math.min(...g.events.map(e => Number(e.createdAtTimestamp)));
+      const usd = groupUsdValue(g.events, c, priceMapFor(g.net));
+      activityGroups.push({ hash: g.hash, net: g.net, events: g.events, ts, cls: c, usd });
     }
     activityGroups.sort((a, b) => b.ts - a.ts);
     renderActivityTable(activityGroups, days, isYtd);
@@ -1726,16 +1842,12 @@ async function load(refreshMode) {
       returning: trim(growth.returning),
       txCount: trim(growth.txCount),
     });
-    const growthScope = addr ? 'this address' : `${token} across all pools`;
+    const tokenScope = token === 'ALL' ? 'all token types' : `${token} tokens`;
+    const chainScope = selectedNet === 'all' ? 'all chains' : netByKey(selectedNet).label;
+    const growthScope = addr ? 'this address' : `${tokenScope} across ${chainScope}`;
     document.getElementById('growth-sub').textContent = `Wallet activity for ${growthScope}`;
 
     const fmtMap = (m) => Array.from(m.entries()).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `${escapeHtml(k)}×${v}`).join(' · ') || '(none)';
-    const ageText = cacheInfo.cacheAgeMs === 0
-      ? 'just now'
-      : (cacheInfo.cacheAgeMs < 60000 ? Math.round(cacheInfo.cacheAgeMs/1000) + 's ago' : Math.round(cacheInfo.cacheAgeMs/60000) + 'm ago');
-    const cacheLine = cacheInfo.source === 'memory'
-      ? `<b>Cache hit:</b> ${cache.txs.length} tx in memory · last fetched ${ageText} · no API call`
-      : `<b>Cache ${cacheInfo.source}:</b> +${cacheInfo.fetched} new tx · ${cache.txs.length} total cached (last ${cacheInfo.windowDays || days}d)`;
 
     const tzLabel = (() => {
       try {
@@ -1749,49 +1861,61 @@ async function load(refreshMode) {
       const dd = String(t.getDate()).padStart(2,'0') + '/' + String(t.getMonth()+1).padStart(2,'0');
       const hh = String(t.getHours()).padStart(2,'0') + ':' + String(t.getMinutes()).padStart(2,'0');
       const hashShort = g.hash.slice(0, 10) + '…' + g.hash.slice(-4);
-      const sideLabel = g.cls === A.buy ? A.buyLabel : A.sellLabel;
+      const sideLabel = isBuy(A, g.cls) ? A.buyLabel : A.sellLabel;
       const usdTxt = g.usd > 0 ? '$' + g.usd.toLocaleString('en-US',{maximumFractionDigits:2}) : '<i style="color:#ff8888">$0</i>';
-      return `  ${escapeHtml(dd)} ${escapeHtml(hh)} ${escapeHtml(tzLabel)} · <span style="color:#01f799">${escapeHtml(hashShort)}</span> · ${escapeHtml(sideLabel)} ${escapeHtml(token)} · ${usdTxt}`;
+      const netLabel = netByKey(g.net).label;
+      return `  ${escapeHtml(dd)} ${escapeHtml(hh)} ${escapeHtml(tzLabel)} · <span style="color:#7fb0ff">${escapeHtml(netLabel)}</span> · <span style="color:#01f799">${escapeHtml(hashShort)}</span> · ${escapeHtml(sideLabel)} ${escapeHtml(token)} · ${usdTxt}`;
     }).join('<br>');
 
     const parts = [];
-    parts.push(cacheLine);
-    parts.push(`<b>Window:</b> last ${days}d → ${all.length} subgraph tx in ${groups.size} on-chain tx`);
+    // Per-network status line.
+    const netStatus = netsToLoad.map(net => {
+      const nc = getNet(net.key);
+      const info = netInfos.find(i => i.key === net.key) || {};
+      let tag;
+      if (nc.available === false && nc.txs.length === 0) tag = '✕ unavailable';
+      else if (info.source === 'memory') tag = 'cached';
+      else if (info.source === 'error') tag = '⚠ stale';
+      else tag = '+' + (info.fetched || 0);
+      return `${escapeHtml(net.label)} (${nc.txs.length}${tag === 'cached' ? '' : ' ' + tag})`;
+    }).join(' · ');
+    parts.push(`<b>Networks (${selectedNet === 'all' ? 'all' : netByKey(selectedNet).label}):</b> ${netStatus}`);
+    const failed = netsToLoad.filter(n => getNet(n.key).available === false && getNet(n.key).txs.length === 0);
+    if (failed.length) {
+      parts.push(`<b style="color:#ffb454">Unavailable endpoints:</b> ${failed.map(n => `${escapeHtml(n.label)} — ${escapeHtml((getNet(n.key).error||'').slice(0,60))}`).join('<br>  ')}`);
+    }
+    parts.push(`<b>Window:</b> last ${days}d → ${all.length} subgraph tx in ${groups.size} on-chain tx across ${okNets.length} chain(s)`);
     parts.push(`<b>Classification of on-chain tx:</b> ${fmtMap(classCounts)}`);
     const withFrom = all.filter(t => t.from).length;
     parts.push(`<b>Sender (from) populated:</b> ${withFrom} / ${all.length} tx`);
-    if (withFrom === 0) {
-      const raw = all.slice(0, 2).map(t => `id=${escapeHtml((t.id||'').slice(0,24))}… · address=${escapeHtml((t.address||'(empty)').slice(0,24))} · from=${escapeHtml(t.from||'(empty)')}`).join('<br>  ');
-      if (raw) parts.push(`<b>Raw tx sample:</b><br>  ${raw}`);
-      if (schema.txFields?.length) parts.push(`<b>Transaction entity fields:</b> ${schema.txFields.map(escapeHtml).join(', ')}`);
-      if (schema.accountFields?.length) parts.push(`<b>Account entity fields:</b> ${schema.accountFields.map(escapeHtml).join(', ')}`);
-    }
-    if (cache.priceIndex) {
-      const idx = cache.priceIndex.map || {};
-      const assetList = Object.values(idx);
-      const priced = assetList.filter(a => a.usd || a.underlyingUsd);
-      const sampleArr = [];
-      const seenSym = new Set();
-      for (const a of priced) {
+
+    // Aggregate price-index stats across loaded networks.
+    const pxParts = [];
+    let totFeeds = 0, totResolved = 0;
+    const sampleArr = [];
+    const seenSym = new Set();
+    for (const net of okNets) {
+      const pi = getNet(net.key).priceIndex;
+      if (!pi) continue;
+      totFeeds += pi.feedCount || 0;
+      totResolved += pi.feedResolved || 0;
+      for (const a of Object.values(pi.map || {})) {
         const p = a.usd || a.underlyingUsd;
+        if (!p) continue;
         const sym = a.usd ? a.symbol : a.underlyingSymbol;
-        if (seenSym.has(sym)) continue;
-        seenSym.add(sym);
-        sampleArr.push(`${escapeHtml(sym || '?')}=$${p.toLocaleString('en-US',{maximumFractionDigits:4})}`);
-        if (sampleArr.length >= 6) break;
+        const tag = net.label + ':' + sym;
+        if (seenSym.has(tag)) continue;
+        seenSym.add(tag);
+        if (sampleArr.length < 8) sampleArr.push(`${escapeHtml(sym || '?')}=$${p.toLocaleString('en-US',{maximumFractionDigits:4})}`);
       }
-      parts.push(`<b>Price index:</b> ${assetList.length} assets · ${priced.length} priced · Chainlink feeds ${cache.priceIndex.feedResolved || 0}/${cache.priceIndex.feedCount || 0} resolved`);
-      if (sampleArr.length) parts.push(`<b>Sample prices:</b> ${sampleArr.join(' · ')}`);
-      if (priced.length === 0 && schema.chainlinkFields?.length) {
-        parts.push(`<b>ChainlinkAggregatorProxy fields:</b> ${schema.chainlinkFields.map(escapeHtml).join(', ')}`);
-      }
-    } else {
-      parts.push(`<b>Price index:</b> not loaded`);
     }
+    parts.push(`<b>Price index:</b> Chainlink feeds ${totResolved}/${totFeeds} resolved across ${okNets.length} chain(s)`);
+    if (sampleArr.length) parts.push(`<b>Sample prices:</b> ${sampleArr.join(' · ')}`);
+
     parts.push(`<b>${escapeHtml(token)}:</b> ${A.buyLabel} ${buyGroups.length} · ${A.sellLabel} ${sellGroups.length} · Total ${allTokenGroups.length}`);
     if (samples) parts.push(`<b>Sample ${escapeHtml(token)} activity (most recent):</b><br>${samples}`);
     if (mode === 'count') parts.push(`<b>⚠ Couldn't compute USD for any ${escapeHtml(token)} group — bars show count per day.</b>`);
-    if (all.length === 0) parts.push(`<b>⚠ No transactions in window. Try a wider time range.</b>`);
+    if (all.length === 0) parts.push(`<b>⚠ No transactions in window. Try a wider time range or another network.</b>`);
     setDiag(parts.join('<br>'));
 
     setStatus(null);
@@ -1890,10 +2014,23 @@ function setBarColor(c, persist) {
   } catch (e) {}
 }
 
+// Populate the network dropdown from config (keeps "All chains" as the first option).
+(function populateNetworks() {
+  const sel = document.getElementById('network-select');
+  for (const net of NETWORKS) {
+    const opt = document.createElement('option');
+    opt.value = net.key;
+    opt.textContent = net.label;
+    sel.appendChild(opt);
+  }
+})();
+
 try {
   document.getElementById('hide-current').checked = localStorage.getItem(HIDE_PREF_KEY) === '1';
   const savedToken = localStorage.getItem(TOKEN_PREF_KEY);
   if (savedToken && ACTIONS[savedToken]) document.getElementById('token-select').value = savedToken;
+  const savedNet = localStorage.getItem(NET_PREF_KEY);
+  if (savedNet && (savedNet === 'all' || netByKey(savedNet).key === savedNet)) document.getElementById('network-select').value = savedNet;
   const savedAddr = localStorage.getItem(ADDR_PREF_KEY);
   if (savedAddr) document.getElementById('addr-input').value = savedAddr;
   const savedColor = localStorage.getItem(COLOR_PREF_KEY);
@@ -1902,11 +2039,19 @@ try {
 
 document.getElementById('refresh').addEventListener('click', () => load('force'));
 document.getElementById('clear-cache').addEventListener('click', () => {
-  try { localStorage.removeItem(CACHE_KEY); } catch (e) {}
-  cache = { txs: [], fetchedAt: 0, windowStartTs: 0, schema: null };
+  try {
+    for (const net of NETWORKS) localStorage.removeItem(netStoreKey(net.key));
+    localStorage.removeItem(SCHEMA_KEY);
+  } catch (e) {}
+  netCache = {};
+  schemaCache = null;
   load('force');
 });
 document.getElementById('days-select').addEventListener('change', () => load('use-cache'));
+document.getElementById('network-select').addEventListener('change', (e) => {
+  try { localStorage.setItem(NET_PREF_KEY, e.target.value); } catch (err) {}
+  load('use-cache');
+});
 document.getElementById('token-select').addEventListener('change', (e) => {
   try { localStorage.setItem(TOKEN_PREF_KEY, e.target.value); } catch (err) {}
   load('use-cache');
