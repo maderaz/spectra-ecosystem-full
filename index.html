@@ -132,6 +132,18 @@
     margin: 0;
   }
   .chart-section { margin-top: 40px; }
+  .section-divider {
+    margin-top: 56px;
+    padding-top: 24px;
+    border-top: 1px solid rgba(255,255,255,0.1);
+  }
+  .section-title {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: #01f799;
+    margin-bottom: 4px;
+  }
   .chart-header {
     display: flex;
     align-items: baseline;
@@ -583,6 +595,71 @@
         </div>
         <div class="x-axis" id="xaxis-sell"></div>
         <div class="tooltip" id="tt-sell"></div>
+      </div>
+    </div>
+
+    <div class="section-divider">
+      <h2 class="section-title">Growth &amp; Adoption</h2>
+      <div class="section-sub" id="growth-sub">Wallet activity for YT across all pools</div>
+    </div>
+
+    <div class="chart-section">
+      <div class="chart-header">
+        <h2>Active Wallets / Day</h2>
+        <button class="download-btn" id="dl-active" title="Download chart as transparent PNG">Download PNG</button>
+      </div>
+      <div class="section-sub">Distinct wallets transacting each day</div>
+      <div class="chart-wrap">
+        <div class="chart" id="chart-active">
+          <div class="grid" id="grid-active"></div>
+        </div>
+        <div class="x-axis" id="xaxis-active"></div>
+        <div class="tooltip" id="tt-active"></div>
+      </div>
+    </div>
+
+    <div class="chart-section">
+      <div class="chart-header">
+        <h2>New Wallets / Day</h2>
+        <button class="download-btn" id="dl-new" title="Download chart as transparent PNG">Download PNG</button>
+      </div>
+      <div class="section-sub">Wallets seen for the first time within this window</div>
+      <div class="chart-wrap">
+        <div class="chart" id="chart-new">
+          <div class="grid" id="grid-new"></div>
+        </div>
+        <div class="x-axis" id="xaxis-new"></div>
+        <div class="tooltip" id="tt-new"></div>
+      </div>
+    </div>
+
+    <div class="chart-section">
+      <div class="chart-header">
+        <h2>Returning Wallets / Day</h2>
+        <button class="download-btn" id="dl-returning" title="Download chart as transparent PNG">Download PNG</button>
+      </div>
+      <div class="section-sub">Wallets active today that also transacted on an earlier day</div>
+      <div class="chart-wrap">
+        <div class="chart" id="chart-returning">
+          <div class="grid" id="grid-returning"></div>
+        </div>
+        <div class="x-axis" id="xaxis-returning"></div>
+        <div class="tooltip" id="tt-returning"></div>
+      </div>
+    </div>
+
+    <div class="chart-section">
+      <div class="chart-header">
+        <h2>Transactions / Day</h2>
+        <button class="download-btn" id="dl-txcount" title="Download chart as transparent PNG">Download PNG</button>
+      </div>
+      <div class="section-sub">On-chain transaction count per day</div>
+      <div class="chart-wrap">
+        <div class="chart" id="chart-txcount">
+          <div class="grid" id="grid-txcount"></div>
+        </div>
+        <div class="x-axis" id="xaxis-txcount"></div>
+        <div class="tooltip" id="tt-txcount"></div>
       </div>
     </div>
 
@@ -1096,6 +1173,39 @@ function aggregateDailyGroupsByCount(groups, days) {
   return Array.from(buckets.values());
 }
 
+function aggregateGrowth(groups, days) {
+  const sorted = [...groups].sort((a, b) => a.ts - b.ts);
+  const firstSeenDay = new Map();   // wallet -> iso of first activity in window
+  const perDayWallets = new Map();  // iso -> Set(wallet)
+  const perDayTx = new Map();       // iso -> count
+
+  for (const g of sorted) {
+    const iso = isoDay(new Date(g.ts * 1000));
+    perDayTx.set(iso, (perDayTx.get(iso) || 0) + 1);
+    const w = (g.from || '').toLowerCase();
+    if (!w) continue;
+    if (!perDayWallets.has(iso)) perDayWallets.set(iso, new Set());
+    perDayWallets.get(iso).add(w);
+    if (!firstSeenDay.has(w)) firstSeenDay.set(w, iso);
+  }
+
+  const buckets = emptyDailyBuckets(days);
+  const active = [], newW = [], returning = [], txCount = [];
+  for (const [iso, b] of buckets) {
+    const wallets = perDayWallets.get(iso) || new Set();
+    let nw = 0, rw = 0;
+    for (const w of wallets) {
+      if (firstSeenDay.get(w) === iso) nw++; else rw++;
+    }
+    const mk = (amount) => ({ date: b.date, iso: b.iso, amount, count: amount });
+    active.push(mk(wallets.size));
+    newW.push(mk(nw));
+    returning.push(mk(rw));
+    txCount.push(mk(perDayTx.get(iso) || 0));
+  }
+  return { active, newW, returning, txCount };
+}
+
 function buildBarChart(opts) {
   const { data, maxAmt, chartEl, gridEl, xaxisEl, tooltipEl, labelStep, labelKey, dateKey, countMode } = opts;
   chartEl.innerHTML = '';
@@ -1129,9 +1239,10 @@ function buildBarChart(opts) {
     if (d.amount > 0) bar.style.height = ((d.amount / max) * 100) + '%';
     col.appendChild(bar);
     col.addEventListener('mouseenter', () => {
+      const unit = opts.unit || 'transaction';
       const amtTxt = d.amount === 0
         ? 'No activity'
-        : (countMode ? d.amount + ' transaction' + (d.amount === 1 ? '' : 's') : '$' + d.amount.toLocaleString('en-US', {maximumFractionDigits: 2}));
+        : (countMode ? d.amount.toLocaleString('en-US') + ' ' + unit + (d.amount === 1 ? '' : 's') : '$' + d.amount.toLocaleString('en-US', {maximumFractionDigits: 2}));
       tooltipEl.innerHTML =
         '<div class="tt-date">' + d[dateKey] + '</div>' +
         '<div class="tt-amt">' + amtTxt + '</div>' +
@@ -1195,6 +1306,28 @@ function render(total, buy, sell, mode) {
   renderOne(total, 'total');
   renderOne(buy, 'buy');
   renderOne(sell, 'sell');
+}
+
+let latestGrowth = { active: [], newW: [], returning: [], txCount: [] };
+
+function renderGrowthCharts(g) {
+  latestGrowth = g;
+  const one = (data, suffix, unit) => {
+    buildBarChart({
+      data, maxAmt: Math.max(...data.map(d => d.amount), 0),
+      chartEl: document.getElementById('chart-' + suffix),
+      gridEl: document.getElementById('grid-' + suffix),
+      xaxisEl: document.getElementById('xaxis-' + suffix),
+      tooltipEl: document.getElementById('tt-' + suffix),
+      labelStep: data.length > 20 ? Math.ceil(data.length / 12) : 1,
+      labelKey: 'date', dateKey: 'iso',
+      countMode: true, unit,
+    });
+  };
+  one(g.active, 'active', 'wallet');
+  one(g.newW, 'new', 'wallet');
+  one(g.returning, 'returning', 'wallet');
+  one(g.txCount, 'txcount', 'transaction');
 }
 
 function renderActivityTable(groups) {
@@ -1514,6 +1647,16 @@ async function load(refreshMode) {
     renderStats(trim(buyUsdAll), trim(sellUsdAll), buyCountShown, sellCountShown, mode === 'count');
     render(totalArr, buyArr, sellArr, mode);
 
+    const growth = aggregateGrowth(allTokenGroups, days);
+    renderGrowthCharts({
+      active: trim(growth.active),
+      newW: trim(growth.newW),
+      returning: trim(growth.returning),
+      txCount: trim(growth.txCount),
+    });
+    const growthScope = addr ? 'this address' : `${token} across all pools`;
+    document.getElementById('growth-sub').textContent = `Wallet activity for ${growthScope}`;
+
     const fmtMap = (m) => Array.from(m.entries()).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `${escapeHtml(k)}×${v}`).join(' · ') || '(none)';
     const ageText = cacheInfo.cacheAgeMs === 0
       ? 'just now'
@@ -1730,6 +1873,18 @@ document.getElementById('dl-sell').addEventListener('click', () => {
   exportChartPng(latestCharts.sell,
     { labelKey: 'date', countMode: latestCharts.mode === 'count', gap: 3 },
     `${tokenSlug()}-${ACTIONS[document.getElementById('token-select').value].sellLabel.toLowerCase()}-daily.png`);
+});
+document.getElementById('dl-active').addEventListener('click', () => {
+  exportChartPng(latestGrowth.active, { labelKey: 'date', countMode: true, gap: 3 }, `${tokenSlug()}-active-wallets-daily.png`);
+});
+document.getElementById('dl-new').addEventListener('click', () => {
+  exportChartPng(latestGrowth.newW, { labelKey: 'date', countMode: true, gap: 3 }, `${tokenSlug()}-new-wallets-daily.png`);
+});
+document.getElementById('dl-returning').addEventListener('click', () => {
+  exportChartPng(latestGrowth.returning, { labelKey: 'date', countMode: true, gap: 3 }, `${tokenSlug()}-returning-wallets-daily.png`);
+});
+document.getElementById('dl-txcount').addEventListener('click', () => {
+  exportChartPng(latestGrowth.txCount, { labelKey: 'date', countMode: true, gap: 3 }, `${tokenSlug()}-transactions-daily.png`);
 });
 load('use-cache');
 </script>
